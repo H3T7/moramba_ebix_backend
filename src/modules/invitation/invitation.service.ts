@@ -23,10 +23,18 @@ export async function createInvitation(companyId: string, invitedByEmployeeId: s
   const company = await db.query.companies.findFirst({ where: eq(companies.id, companyId) });
   if (!company) throw new AppError(404, "That company doesn't exist.");
 
+  // Same normalize-on-write reasoning as auth.service.ts's registerEmployee
+  // — this is THE fix for a real reported bug: an Admin typing
+  // "New.Employee@Company.com" here and the invited person registering as
+  // "new.employee@company.com" were silently treated as different emails,
+  // so listMyPendingInvitations's exact-match query never found the
+  // invitation they were plainly waiting for.
+  const email = input.email.toLowerCase();
+
   await expireStaleInvitations(companyId);
 
   const existingPending = await db.query.invitations.findFirst({
-    where: and(eq(invitations.companyId, companyId), eq(invitations.email, input.email), eq(invitations.status, "pending")),
+    where: and(eq(invitations.companyId, companyId), eq(invitations.email, email), eq(invitations.status, "pending")),
   });
   if (existingPending) {
     throw new AppError(409, "There's already a pending invitation for that email at this company.");
@@ -34,7 +42,7 @@ export async function createInvitation(companyId: string, invitedByEmployeeId: s
 
   // If this email already belongs to a Moramba account, we link to it —
   // but we do NOT create a membership yet. That only happens on accept.
-  const existingEmployee = await db.query.employees.findFirst({ where: eq(employees.email, input.email) });
+  const existingEmployee = await db.query.employees.findFirst({ where: eq(employees.email, email) });
 
   const invitedAt = new Date();
   const expiresAt = new Date(invitedAt.getTime() + INVITATION_WINDOW_DAYS * 86400000);
@@ -43,7 +51,7 @@ export async function createInvitation(companyId: string, invitedByEmployeeId: s
     .insert(invitations)
     .values({
       companyId,
-      email: input.email,
+      email,
       firstName: input.firstName,
       lastName: input.lastName,
       role: input.role,
@@ -79,11 +87,12 @@ export async function listInvitationsByCompany(companyId: string) {
  */
 export async function listMyPendingInvitations(email: string) {
   await expireStaleInvitations();
+  const normalizedEmail = email.toLowerCase();
   const rows = await db
     .select({ invitation: invitations, company: companies })
     .from(invitations)
     .innerJoin(companies, eq(invitations.companyId, companies.id))
-    .where(and(eq(invitations.email, email), eq(invitations.status, "pending")));
+    .where(and(eq(invitations.email, normalizedEmail), eq(invitations.status, "pending")));
 
   return rows.map((r) => ({
     ...r.invitation,
@@ -108,6 +117,17 @@ async function getPendingInvitationForEmail(invitationId: string, email: string)
   return invite;
 }
 
+const MEMBERSHIP_ROLE_TO_RBAC_ROLE: Record<string, "admin" | "hr" | "accountant" | "employee"> = {
+  owner: "admin",
+  admin: "admin",
+  hr: "hr",
+  accountant: "accountant",
+  operations: "employee",
+  verifier: "employee",
+  viewer: "employee",
+  employee: "employee",
+};
+
 /**
  * PENDING -> ACCEPTED, then (and only then) a real membership is created.
  * This is the one moment an invitation actually grants access — everything
@@ -129,21 +149,31 @@ export async function acceptInvitation(invitationId: string, acceptingEmployee: 
       set: { role: invite.role, status: "active" },
     });
 
-  // First company ever? Backfill it as their "home" employee record.
+  // First company ever? Backfill it as their "home" employee record — and
+  // set their global RBAC role (employees.role: admin/hr/accountant/
+  // employee — a different, SEPARATE field from the membership role just
+  // above, see company.service.ts's createCompany for the full reasoning
+  // on why these two had to be connected) to match what they were invited
+  // as. Without this, someone invited as "Admin" would accept and still
+  // only see the bare-minimum Employee sidebar.
+  let updatedEmployeeRole: typeof employees.$inferSelect.role | undefined;
   if (!acceptingEmployee.companyId) {
-    await db
+    const [updated] = await db
       .update(employees)
       .set({
         companyId: invite.companyId,
         department: invite.department,
         designation: invite.designation,
         phone: invite.phone ?? undefined,
+        role: MEMBERSHIP_ROLE_TO_RBAC_ROLE[invite.role] ?? "employee",
       })
-      .where(eq(employees.id, acceptingEmployee.id));
+      .where(eq(employees.id, acceptingEmployee.id))
+      .returning();
+    updatedEmployeeRole = updated.role;
   }
 
   const company = await db.query.companies.findFirst({ where: eq(companies.id, invite.companyId) });
-  return { invitation: { ...invite, status: "accepted" as const }, company };
+  return { invitation: { ...invite, status: "accepted" as const }, company, updatedEmployeeRole };
 }
 
 export async function rejectInvitation(invitationId: string, email: string) {

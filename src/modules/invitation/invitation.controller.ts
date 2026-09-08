@@ -10,6 +10,7 @@ import {
   cancelInvitation,
 } from "./invitation.service.js";
 import { getEmployeeById } from "../auth/auth.service.js";
+import { signEmployeeToken } from "../../lib/jwt.js";
 import { AppError } from "../../middleware/errorHandler.js";
 
 export async function create(req: Request, res: Response) {
@@ -29,10 +30,20 @@ export async function listMine(req: Request, res: Response) {
   res.status(200).json(list);
 }
 
+/**
+ * Same reasoning as company.controller.ts's create(): the JWT this person
+ * is holding was signed BEFORE they accepted, so if this was their first
+ * company (acceptInvitation just updated their RBAC role — see
+ * invitation.service.ts), the old token still says "employee." A fresh
+ * token is only signed and returned when the role actually changed, so
+ * accepting into a SECOND company (which never touches the RBAC role)
+ * doesn't need one.
+ */
 export async function accept(req: Request, res: Response) {
   const { employee } = await getEmployeeById(req.user!.sub);
   const result = await acceptInvitation(req.params.id as string, employee);
-  res.status(200).json(result);
+  const token = result.updatedEmployeeRole ? signEmployeeToken({ sub: employee.id, role: result.updatedEmployeeRole, type: "employee" }) : undefined;
+  res.status(200).json({ ...result, token });
 }
 
 export async function reject(req: Request, res: Response) {

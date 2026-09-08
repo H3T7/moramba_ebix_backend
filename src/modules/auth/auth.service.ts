@@ -26,7 +26,16 @@ function toPublicEmployee(row: typeof employees.$inferSelect) {
 }
 
 export async function registerEmployee(input: RegisterInput) {
-  const existing = await db.query.employees.findFirst({ where: eq(employees.email, input.email) });
+  // Emails are stored and matched case-insensitively EVERYWHERE in this
+  // app (register, login, invitations) — normalizing to lowercase at the
+  // one point data gets written is what makes that actually true, rather
+  // than relying on every future query to remember to lowercase both
+  // sides. Without this, "John@Example.com" (typed by an Admin sending an
+  // invitation) and "john@example.com" (typed by John registering) would
+  // silently be treated as two different people.
+  const email = input.email.toLowerCase();
+
+  const existing = await db.query.employees.findFirst({ where: eq(employees.email, email) });
   if (existing) {
     throw new AppError(409, "An account with that email already exists.");
   }
@@ -49,7 +58,7 @@ export async function registerEmployee(input: RegisterInput) {
       employeeCode: input.employeeCode,
       firstName: input.firstName,
       lastName: input.lastName,
-      email: input.email,
+      email,
       passwordHash,
       phone: input.phone,
       department: input.department,
@@ -70,7 +79,8 @@ export async function registerEmployee(input: RegisterInput) {
 }
 
 export async function loginEmployee(input: LoginInput) {
-  const employee = await db.query.employees.findFirst({ where: eq(employees.email, input.email) });
+  const email = input.email.toLowerCase();
+  const employee = await db.query.employees.findFirst({ where: eq(employees.email, email) });
 
   // Deliberately the SAME error message whether the email doesn't exist or
   // the password is wrong. If we said "no account with that email" for one

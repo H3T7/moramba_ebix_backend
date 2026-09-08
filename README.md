@@ -451,3 +451,58 @@ The cause: `seed.ts`'s cleanup step was never updated as new modules were added 
 Fixed by adding every table introduced since then to the cleanup, in the correct child-before-parent order (payroll entries → payroll runs → salary structures → shipment events → shipments → document versions → documents → payments → invoice/bill line items → invoices/bills → invitations → memberships → employees → customers/vendors/products → companies → verifiers). Re-tested: seed now runs cleanly even with real transactional data already in the database, confirmed by checking the count came back to exactly the seeded numbers (0 invoices, 4 customers) right after.
 
 **If you add a new table with a foreign key to an existing one in the future, remember to add its cleanup to `seed.ts` too** — this exact class of bug will resurface otherwise, and the error message points at the table being *referenced*, not the one you actually forgot to clear, which makes it a bit confusing to track down.
+
+## 23. A real gap found and fixed: company creation never made anyone Owner
+
+Reported issue: registering a new account and creating a company worked in isolation, but the person who created it had no real ownership of it — `POST /api/companies` just inserted a row and stopped. No membership was created at all, so "the creator becomes Owner" (a core rule from day one) was never actually true on the backend.
+
+**Fixed:** `createCompany` now runs inside a transaction that inserts the company AND a real `employee_companies` row with `role: "owner"` for whoever created it — same pattern as every other parent+child insert in this API. If it's their first company ever, their `employees.companyId` (previously `null`) gets backfilled too, identical to what happens when accepting an invitation for the first time. The route now requires `requireAuth` (previously fully public) since it needs to know who's creating it.
+
+**Tested end to end against a real, freshly-wiped database:** registered a brand-new account with zero fields beyond name/email/password → confirmed `accessibleCompanies: []` → created a company → confirmed `/auth/me` now shows that company with role `"owner"` and `companyId` correctly backfilled → created a SECOND company as the same person → confirmed they're `"owner"` of both, independently.
+
+## 24. Testing from a genuinely empty database
+
+`npm run db:wipe` clears every table's data (keeping the schema/migrations intact) without seeding anything back — no demo company, no demo employees. Use this to test the real flow exactly as a brand-new person would experience it:
+
+```bash
+npm run db:wipe
+npm run dev
+```
+
+Then register a real account, create a company, and confirm you're its Owner — no pre-existing demo data to lean on or accidentally rely on. Run `npm run db:seed` afterward whenever you want the demo data back.
+
+## 25. The matching frontend gap: Register was never actually wired
+
+The backend has supported real self-registration (with `companyId` fully optional) since Milestone 5 — but `RegisterPage.jsx` on the frontend never called it. It only ran a `setTimeout` to simulate a network round-trip, then moved on. Nothing was ever created, so signing in with a "newly registered" account always failed — there was nothing in the database to sign into.
+
+Fixed on the frontend side: `RegisterPage.jsx` now calls the real `registerRequest()`, `CompanyOnboardingPage.jsx` now calls the real `createCompanyThunk` (hitting the fixed `POST /api/companies` from Section 23) and bridges the result into the app's still-partially-mock world, and a real Rules-of-Hooks bug (a `useState` declared after an early `return`) was caught by lint and fixed before it shipped. See the frontend project's own notes for the full details — this section is here so both sides of the fix are discoverable from either repo.
+
+## 26. A real gap found and fixed: becoming Owner didn't grant Owner-level access
+
+Reported (with a screenshot): a brand-new user registered, created a company, correctly saw "Owner" in the Company Switcher — but the sidebar only showed Dashboard and My Profile, like a plain Employee.
+
+**Root cause:** two separate role fields, never connected. `employee_companies.role` (owner/admin/hr/accountant/operations/verifier/viewer/employee — per-company, what shows in the Company Switcher) is intentionally different from `employees.role` (admin/hr/accountant/employee — the single global RBAC field the frontend's sidebar and permission checks actually read). Creating a company correctly set the membership role to `"owner"`, but never touched `employees.role`, which stays at its registration default of `"employee"` forever. Same gap existed on the invitation-accept path — accepting an invitation as "HR" never updated the RBAC field either.
+
+**Fixed in both places**, using the same `!creator.companyId` / `!acceptingEmployee.companyId` guard already used for backfilling their home company — i.e. only on someone's FIRST company, so it can never silently upgrade someone who already has an established role elsewhere just because they created or joined an unrelated second company:
+- `company.service.ts`'s `createCompany` — sets `employees.role = "admin"` for the creator, alongside the existing owner membership and companyId backfill.
+- `invitation.service.ts`'s `acceptInvitation` — maps the invitation's membership role to the closest RBAC role (`owner`/`admin` → `admin`, `hr` → `hr`, `accountant` → `accountant`, everything else → `employee`) and sets it on first acceptance.
+
+**Tested against a real, freshly-wiped database, both paths:** registered a brand-new account, confirmed `role: "employee"` right after registering, created a company, confirmed `role` flipped to `"admin"` while the membership stayed correctly `"owner"`. Separately: invited a brand-new email as `"hr"`, confirmed their role was `"employee"` before accepting and `"hr"` immediately after.
+
+## 27. Two more real gaps found and fixed
+
+### Stale role until logout/login (frontend fix, documented on both sides)
+
+Following on from Section 26's fix: setting `employees.role` correctly server-side wasn't quite enough, because the JWT the person is already holding was signed BEFORE that update — it's stateless and never auto-refreshes. `company.controller.ts`'s `create` and `invitation.controller.ts`'s `accept` now sign and return a **fresh token** alongside their normal response, but ONLY when the role-changing branch in the service actually ran (first company / first acceptance) — accepting into a second company, which never touches the RBAC role, correctly returns no `token` field at all.
+
+**Tested by decoding both tokens directly:** the token issued at registration decoded to `role: "employee"`; the token returned from creating a company (same person, immediately after) decoded to `role: "admin"` — confirmed as two genuinely different, correctly-signed tokens, not the same one reused.
+
+The frontend swaps this in immediately via a new `refreshToken` Redux action (updating both the stored JWT and the separate `user.role` field the sidebar actually reads), so the correct sidebar shows up right after creating a company or accepting an invitation — no logout/login round-trip required anymore.
+
+### Invited employees couldn't see their own invitation
+
+**Root cause:** email case-sensitivity. `createInvitation` never normalized the email before storing it, and `listMyPendingInvitations`'s matching query was a case-sensitive exact match. An Admin typing `New.Employee@Example.COM` while inviting someone, and that person registering as `new.employee@example.com` (the far more common way people actually type their own email), were silently treated as two different email addresses — the invitation existed in the database the whole time, just permanently invisible to the person it was for.
+
+**Fixed** by normalizing every email to lowercase at the point it's written — `registerEmployee`, `loginEmployee`, and `createInvitation` all lowercase now — plus a defensive lowercase on the read side in `listMyPendingInvitations` too, so it's correct regardless of what called it.
+
+**Tested with the exact mismatched-case scenario:** invited `New.Employee@Example.COM`, registered as `new.employee@example.com`, confirmed the invitation was found (`1 invitation(s) found`) where it previously would have returned zero.
