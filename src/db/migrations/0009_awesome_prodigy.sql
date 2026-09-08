@@ -1,0 +1,2 @@
+ALTER TABLE "documents" ADD COLUMN "reviewer_verifier_id" uuid;--> statement-breakpoint
+ALTER TABLE "documents" ADD CONSTRAINT "documents_reviewer_verifier_id_verifiers_id_fk" FOREIGN KEY ("reviewer_verifier_id") REFERENCES "public"."verifiers"("id") ON DELETE no action ON UPDATE no action;
