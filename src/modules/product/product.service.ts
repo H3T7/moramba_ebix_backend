@@ -1,35 +1,32 @@
-import { eq } from "drizzle-orm";
-import { db } from "../../db/client.js";
-import { products, companies } from "../../db/schema/index.js";
+import { prisma } from "../../db/client.js";
 import { AppError } from "../../middleware/errorHandler.js";
 import type { CreateProductInput, UpdateProductInput } from "./product.schema.js";
 
 export async function listProductsByCompany(companyId: string) {
-  return db.select().from(products).where(eq(products.companyId, companyId));
+  return prisma.product.findMany({ where: { companyId } });
 }
 
 export async function getProduct(id: string) {
-  const product = await db.query.products.findFirst({ where: eq(products.id, id) });
+  const product = await prisma.product.findUnique({ where: { id } });
   if (!product) throw new AppError(404, "Product not found.");
   return product;
 }
 
 export async function createProduct(companyId: string, input: CreateProductInput) {
-  const company = await db.query.companies.findFirst({ where: eq(companies.id, companyId) });
+  const company = await prisma.company.findUnique({ where: { id: companyId } });
   if (!company) throw new AppError(404, "That company doesn't exist.");
 
-  const [created] = await db.insert(products).values({ ...input, companyId }).returning();
-  return created;
+  return prisma.product.create({ data: { ...input, companyId } });
 }
 
 export async function updateProduct(id: string, input: UpdateProductInput) {
-  const [updated] = await db.update(products).set(input).where(eq(products.id, id)).returning();
+  const updated = await prisma.product.update({ where: { id }, data: input }).catch(() => null);
   if (!updated) throw new AppError(404, "Product not found.");
   return updated;
 }
 
 export async function deleteProduct(id: string) {
-  const [deleted] = await db.delete(products).where(eq(products.id, id)).returning();
+  const deleted = await prisma.product.delete({ where: { id } }).catch(() => null);
   if (!deleted) throw new AppError(404, "Product not found.");
   return { id: deleted.id };
 }

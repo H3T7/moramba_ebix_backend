@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { ZodError } from "zod";
+import { Prisma } from "@prisma/client";
 
 /**
  * A small custom Error subclass so route code can do:
@@ -35,6 +36,44 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
 
   if (err instanceof AppError) {
     return res.status(err.statusCode).json({ error: err.message });
+  }
+
+  /**
+   * Prisma's own error type — thrown by the query engine itself, distinct
+   * from anything this app's code raises deliberately (that's what
+   * AppError above is for). The `.code` values are Prisma's fixed error
+   * catalog; these are the ones actually likely to surface in this API:
+   *
+   *   P2002 — a unique constraint was violated (e.g. two people racing to
+   *           register the same email at the exact same moment — the
+   *           service layer already checks for this first, but a genuine
+   *           race can still slip past that check and hit the DB itself)
+   *   P2025 — "record to update/delete not found" — Prisma throws this
+   *           instead of just returning zero rows the way Drizzle did,
+   *           which is exactly why every service function that does an
+   *           update/delete wraps the call in `.catch(() => null)` and
+   *           checks for null itself, turning this into a clean 404
+   *           instead of it ever reaching here. If one DOES reach here,
+   *           it means a spot was missed — worth checking, not just
+   *           swallowing as a generic 500.
+   *   P2003 — a foreign key constraint failed (e.g. trying to reference a
+   *           company id that doesn't exist) — again, service-layer
+   *           existence checks should catch this first in almost every
+   *           case; this is the fallback if one didn't.
+   */
+  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    if (err.code === "P2002") {
+      const target = (err.meta?.target as string[] | undefined)?.join(", ") ?? "a field";
+      return res.status(409).json({ error: `That ${target} is already in use.` });
+    }
+    if (err.code === "P2025") {
+      return res.status(404).json({ error: "The record you're trying to update or delete doesn't exist." });
+    }
+    if (err.code === "P2003") {
+      return res.status(400).json({ error: "That request references something that doesn't exist." });
+    }
+    console.error("Unhandled Prisma error:", err.code, err.meta);
+    return res.status(500).json({ error: "Something went wrong on our end." });
   }
 
   // Anything else is unexpected — log the real error for us to debug,

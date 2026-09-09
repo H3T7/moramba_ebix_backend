@@ -23,7 +23,10 @@ export async function structureHistory(req: Request, res: Response) {
 
 export async function generateRun(req: Request, res: Response) {
   const input = generateRunSchema.parse(req.body);
-  const run = await generatePayrollRun(req.params.companyId as string, req.user!.sub, input);
+  // req.employee, not req.user.sub — see document.controller.ts's upload()
+  // for why this exact mistake is easy to make and hard to catch (both
+  // are plain UUID strings, so TypeScript won't flag passing the wrong one).
+  const run = await generatePayrollRun(req.params.companyId as string, req.employee!.id, input);
   res.status(201).json(run);
 }
 

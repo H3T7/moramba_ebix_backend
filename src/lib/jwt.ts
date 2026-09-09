@@ -29,10 +29,17 @@ import { env } from "../config/env.js";
 
 // Everything we choose to pack inside the token. Keep this small — it's
 // sent on every request. Never put a password (or its hash) in here.
-export type AuthTokenPayload = {
+//
+// Deliberately NO role here anymore. Role used to live on this token
+// because "employee" used to BE the login identity. Now that a user can
+// belong to many companies with a DIFFERENT role at each (see
+// db/schema/employees.ts), there's no single role that would even make
+// sense to bake into a token that isn't scoped to one company — role is
+// resolved fresh, per request, per company (see requireCompanyRole in
+// middleware/auth.ts), never trusted from an old, possibly-stale claim.
+export type UserTokenPayload = {
   sub: string; // "subject" — the standard JWT field for "whose token is this"
-  role: "admin" | "hr" | "accountant" | "employee";
-  type: "employee"; // distinguishes company-workspace tokens from verifier tokens
+  type: "user"; // distinguishes company-workspace tokens from verifier tokens
 };
 
 export type VerifierTokenPayload = {
@@ -40,7 +47,7 @@ export type VerifierTokenPayload = {
   type: "verifier";
 };
 
-export function signEmployeeToken(payload: AuthTokenPayload): string {
+export function signUserToken(payload: UserTokenPayload): string {
   return jwt.sign(payload, env.JWT_SECRET, { expiresIn: env.JWT_EXPIRES_IN as jwt.SignOptions["expiresIn"] });
 }
 

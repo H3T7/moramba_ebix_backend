@@ -1,17 +1,16 @@
-import { eq, and, sql } from "drizzle-orm";
-import { db } from "../../db/client.js";
-import { bills, billItems, companies, vendors } from "../../db/schema/index.js";
+import { prisma } from "../../db/client.js";
 import { AppError } from "../../middleware/errorHandler.js";
+import { transactionStatusToPrisma, paymentTermsToPrisma } from "../../lib/prismaEnumMaps.js";
 import type { CreateBillInput, UpdateBillInput } from "./bill.schema.js";
 
 async function generateBillNumber(): Promise<string> {
   const year = new Date().getFullYear();
-  const result = await db.execute<{ count: string }>(sql`select count(*) from ${bills} where bill_number like ${"IMP-" + year + "-%"}`);
-  const next = Number(result.rows[0].count) + 1;
+  const count = await prisma.bill.count({ where: { billNumber: { startsWith: `IMP-${year}-` } } });
+  const next = count + 1;
   return `IMP-${year}-${String(next).padStart(4, "0")}`;
 }
 
-function withTotals<T extends { items: { quantity: string; rate: string; taxPercent: string }[] }>(row: T) {
+function withTotals<T extends { items: { quantity: unknown; rate: unknown; taxPercent: unknown }[] }>(row: T) {
   const items = row.items.map((it) => {
     const lineTotal = Number(it.quantity) * Number(it.rate);
     const tax = lineTotal * (Number(it.taxPercent) / 100);
@@ -23,22 +22,17 @@ function withTotals<T extends { items: { quantity: string; rate: string; taxPerc
 }
 
 async function getBillWithItems(id: string) {
-  const bill = await db.query.bills.findFirst({ where: eq(bills.id, id) });
+  const bill = await prisma.bill.findUnique({ where: { id }, include: { items: { orderBy: { sortOrder: "asc" } } } });
   if (!bill) return null;
-  const items = await db.select().from(billItems).where(eq(billItems.billId, id)).orderBy(billItems.sortOrder);
-  return withTotals({ ...bill, items });
+  return withTotals(bill);
 }
 
 export async function listBillsByCompany(companyId: string) {
-  const rows = await db.select().from(bills).where(eq(bills.companyId, companyId));
-  const withSums = await Promise.all(
-    rows.map(async (bill) => {
-      const items = await db.select().from(billItems).where(eq(billItems.billId, bill.id));
-      const { items: _items, ...totals } = withTotals({ ...bill, items });
-      return totals;
-    })
-  );
-  return withSums;
+  const rows = await prisma.bill.findMany({ where: { companyId }, include: { items: true } });
+  return rows.map((bill) => {
+    const { items: _items, ...totals } = withTotals(bill);
+    return totals;
+  });
 }
 
 export async function getBill(id: string) {
@@ -48,63 +42,58 @@ export async function getBill(id: string) {
 }
 
 export async function createBill(companyId: string, input: CreateBillInput) {
-  const company = await db.query.companies.findFirst({ where: eq(companies.id, companyId) });
+  const company = await prisma.company.findUnique({ where: { id: companyId } });
   if (!company) throw new AppError(404, "That company doesn't exist.");
 
-  const vendor = await db.query.vendors.findFirst({ where: and(eq(vendors.id, input.vendorId), eq(vendors.companyId, companyId)) });
+  const vendor = await prisma.vendor.findFirst({ where: { id: input.vendorId, companyId } });
   if (!vendor) throw new AppError(404, "That vendor doesn't exist for this company.");
 
   const billNumber = await generateBillNumber();
 
-  const created = await db.transaction(async (tx) => {
-    const [bill] = await tx
-      .insert(bills)
-      .values({
-        companyId,
-        vendorId: input.vendorId,
-        billNumber,
-        currency: input.currency,
-        paymentTerms: input.paymentTerms,
-        advancePercent: input.advancePercent,
-        importDetails: input.importDetails,
-        requiredDocs: input.requiredDocs,
-      })
-      .returning();
-
-    await tx.insert(billItems).values(
-      input.items.map((item, idx) => ({
-        billId: bill.id,
-        productId: item.productId,
-        description: item.description,
-        hsCode: item.hsCode,
-        unit: item.unit,
-        quantity: item.quantity.toFixed(2),
-        rate: item.rate.toFixed(2),
-        taxPercent: item.taxPercent.toFixed(2),
-        sortOrder: idx,
-      }))
-    );
-
-    return bill;
+  const created = await prisma.bill.create({
+    data: {
+      companyId,
+      vendorId: input.vendorId,
+      billNumber,
+      currency: input.currency,
+      paymentTerms: paymentTermsToPrisma[input.paymentTerms] as never,
+      advancePercent: input.advancePercent,
+      importDetails: input.importDetails,
+      requiredDocs: input.requiredDocs,
+      items: {
+        create: input.items.map((item, idx) => ({
+          productId: item.productId,
+          description: item.description,
+          hsCode: item.hsCode,
+          unit: item.unit,
+          quantity: item.quantity.toFixed(2),
+          rate: item.rate.toFixed(2),
+          taxPercent: item.taxPercent.toFixed(2),
+          sortOrder: idx,
+        })),
+      },
+    },
   });
 
   return getBillWithItems(created.id);
 }
 
 export async function updateBill(id: string, input: UpdateBillInput) {
-  const existing = await db.query.bills.findFirst({ where: eq(bills.id, id) });
+  const existing = await prisma.bill.findUnique({ where: { id } });
   if (!existing) throw new AppError(404, "Bill not found.");
   if (existing.submitted) throw new AppError(409, "A submitted bill can't be edited.");
 
-  await db.transaction(async (tx) => {
-    const { items, ...fields } = input;
-    if (Object.keys(fields).length > 0) {
-      await tx.update(bills).set({ ...fields, updatedAt: new Date() }).where(eq(bills.id, id));
+  const { items, ...fields } = input;
+  const mappedFields = { ...fields, ...(fields.paymentTerms ? { paymentTerms: paymentTermsToPrisma[fields.paymentTerms] as never } : {}) };
+
+  await prisma.$transaction(async (tx) => {
+    if (Object.keys(mappedFields).length > 0) {
+      await tx.bill.update({ where: { id }, data: mappedFields });
     }
     if (items) {
-      await tx.delete(billItems).where(eq(billItems.billId, id));
-      await tx.insert(billItems).values(
-        items.map((item, idx) => ({
+      await tx.billItem.deleteMany({ where: { billId: id } });
+      await tx.billItem.createMany({
+        data: items.map((item, idx) => ({
           billId: id,
           productId: item.productId,
           description: item.description,
@@ -114,8 +103,8 @@ export async function updateBill(id: string, input: UpdateBillInput) {
           rate: item.rate.toFixed(2),
           taxPercent: item.taxPercent.toFixed(2),
           sortOrder: idx,
-        }))
-      );
+        })),
+      });
     }
   });
 
@@ -123,33 +112,28 @@ export async function updateBill(id: string, input: UpdateBillInput) {
 }
 
 export async function updateBillStatus(id: string, status: string) {
-  const [updated] = await db
-    .update(bills)
-    .set({ status: status as typeof bills.$inferSelect.status, updatedAt: new Date() })
-    .where(eq(bills.id, id))
-    .returning();
+  const updated = await prisma.bill.update({ where: { id }, data: { status: transactionStatusToPrisma[status] as never } }).catch(() => null);
   if (!updated) throw new AppError(404, "Bill not found.");
   return getBillWithItems(id);
 }
 
 export async function submitBill(id: string) {
-  const existing = await db.query.bills.findFirst({ where: eq(bills.id, id) });
+  const existing = await prisma.bill.findUnique({ where: { id } });
   if (!existing) throw new AppError(404, "Bill not found.");
   if (existing.submitted) throw new AppError(409, "This bill was already submitted.");
 
-  const [updated] = await db
-    .update(bills)
-    .set({ submitted: true, submittedAt: new Date(), status: "Submitted", updatedAt: new Date() })
-    .where(eq(bills.id, id))
-    .returning();
+  const updated = await prisma.bill.update({
+    where: { id },
+    data: { submitted: true, submittedAt: new Date(), status: "Submitted" },
+  });
   return getBillWithItems(updated.id);
 }
 
 export async function deleteBill(id: string) {
-  const existing = await db.query.bills.findFirst({ where: eq(bills.id, id) });
+  const existing = await prisma.bill.findUnique({ where: { id } });
   if (!existing) throw new AppError(404, "Bill not found.");
   if (existing.submitted) throw new AppError(409, "A submitted bill can't be deleted.");
 
-  await db.delete(bills).where(eq(bills.id, id));
+  await prisma.bill.delete({ where: { id } });
   return { id };
 }

@@ -1,0 +1,720 @@
+// ============================================================================
+// Moramba — Prisma schema
+// ============================================================================
+// This is a 1:1 translation of the previous Drizzle schema (src/db/schema/*.ts,
+// now removed) into Prisma's own DSL. Every table, column, enum, default,
+// relation, and the two CHECK constraints (payments/documents/shipments each
+// belong to exactly one of an invoice or a bill) are preserved exactly.
+//
+// IMPORTANT — THIS FILE HAS NOT BEEN RUN IN THIS ENVIRONMENT.
+// Prisma's CLI needs to download a schema-engine binary from
+// binaries.prisma.sh to run `generate`/`migrate`, and that domain is blocked
+// by this sandbox's network allowlist. This schema was written carefully by
+// hand and reviewed against the original Drizzle definitions field-by-field,
+// but `prisma generate` / `prisma migrate dev` have never actually been run
+// against it. Run them yourself locally — see the testing steps provided
+// alongside this file.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+/// One unified role — see the big comment in the Employee model.
+enum MembershipRole {
+  owner
+  admin
+  hr
+  accountant
+  operations
+  verifier
+  viewer
+  employee
+
+  @@map("membership_role")
+}
+
+enum EmploymentType {
+  FullTime @map("Full-time")
+  PartTime @map("Part-time")
+  Contract
+
+  @@map("employment_type")
+}
+
+enum EmployeeStatus {
+  active
+  suspended
+  removed
+
+  @@map("employee_status")
+}
+
+enum InvitationStatus {
+  pending
+  accepted
+  rejected
+  expired
+  cancelled
+
+  @@map("invitation_status")
+}
+
+/// Used by BOTH Invoice and Bill — Drizzle had these as two separate
+/// Postgres enum types (invoice_status, bill_status) with identical values.
+/// Prisma enums are global to the schema, so this one enum backs both
+/// columns; @@map keeps invoice_status as the actual Postgres type name to
+/// stay close to the original, and bill.status reuses the same Prisma enum
+/// (Postgres will just have one shared enum type instead of two identical
+/// ones — a harmless, arguably nicer, simplification).
+enum TransactionStatus {
+  Draft
+  Submitted
+  Processing
+  DocumentsPending @map("Documents Pending")
+  Ready
+  Completed
+  Cancelled
+
+  @@map("invoice_status")
+}
+
+enum PaymentTerms {
+  PayAdvance      @map("Pay Advance")
+  PayLater        @map("Pay Later")
+  LetterOfCredit  @map("Letter of Credit")
+  FiftyFiftyShipment @map("50% Advance / 50% on Shipment")
+
+  @@map("payment_terms")
+}
+
+enum PaymentType {
+  advance
+  final
+
+  @@map("payment_type")
+}
+
+enum PaymentMethod {
+  bank_transfer
+  wire
+  letter_of_credit
+  cash
+  other
+
+  @@map("payment_method")
+}
+
+enum PaymentStatus {
+  pending
+  completed
+  failed
+
+  @@map("payment_status")
+}
+
+enum DocumentCategory {
+  product
+  export
+  import
+  customs
+  other
+
+  @@map("document_category")
+}
+
+enum DocumentStatus {
+  PendingVerification @map("Pending Verification")
+  UnderReview          @map("Under Review")
+  Verified
+  Rejected
+  RequiresChanges      @map("Requires Changes")
+
+  @@map("document_status")
+}
+
+enum ShipmentStatus {
+  Preparing
+  InTransit @map("In Transit")
+  Customs
+  Delivered
+  Delayed
+  Cancelled
+
+  @@map("shipment_status")
+}
+
+enum PayrollRunStatus {
+  Pending
+  Processing
+  Completed
+
+  @@map("payroll_run_status")
+}
+
+enum PayrollEntryStatus {
+  Pending
+  Processed
+  Paid
+
+  @@map("payroll_entry_status")
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+/// THE identity table — one row per person, ever, no matter how many
+/// companies they belong to. See employees.ts's old comment (now here):
+/// email is unique HERE, not on Employee, because identity is global.
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  firstName    String    @map("first_name")
+  lastName     String    @map("last_name")
+  phone        String?
+  dob          DateTime? @db.Date
+  gender       String?
+  address      String?
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  employees        Employee[]
+  invitedAsAccount Invitation[] @relation("InvitedUser")
+
+  @@map("users")
+}
+
+/// A verifier is deliberately NOT linked to User/Employee/Company at all —
+/// a completely separate identity realm. A verifier can review documents
+/// belonging to ANY company; they're not a member of one.
+model Verifier {
+  id             String   @id @default(uuid())
+  name           String
+  email          String   @unique
+  passwordHash   String   @map("password_hash")
+  specialization String?
+  avatarColor    String   @default("#503589") @map("avatar_color")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  reviewedDocuments Document[]
+
+  @@map("verifiers")
+}
+
+// ---------------------------------------------------------------------------
+// Companies & membership
+// ---------------------------------------------------------------------------
+
+model Company {
+  id        String   @id @default(uuid())
+  name      String
+  logoText  String   @map("logo_text")
+  logoColor String   @map("logo_color")
+  taxId     String   @map("tax_id")
+  currency  String   @default("INR")
+
+  /// Always read/written as a whole object, never queried field-by-field —
+  /// see the original companies.ts comment on why this is JSONB, not five
+  /// separate columns. Shape: { line1, line2?, city, state, zip, country }
+  address Json
+  /// Shape: { accountName, accountNumber, bankName, ifsc, swiftCode?, branch? }
+  bank    Json
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  employees        Employee[]
+  invitations      Invitation[]
+  customers        Customer[]
+  vendors          Vendor[]
+  products         Product[]
+  invoices         Invoice[]
+  bills            Bill[]
+  payments         Payment[]
+  documents        Document[]
+  shipments        Shipment[]
+  salaryStructures SalaryStructure[]
+  payrollRuns      PayrollRun[]
+
+  @@map("companies")
+}
+
+/// One row per (user, company) pair — this IS the membership, not a
+/// profile that points at a separate join row. See the long comment that
+/// used to live in employees.ts: the same person can be Owner at one
+/// company and Operations at another because each relationship gets its
+/// own row here, with its own role, status, department, bank details —
+/// everything genuinely specific to working at THAT one company.
+model Employee {
+  id        String @id @default(uuid())
+  userId    String @map("user_id")
+  companyId String @map("company_id")
+
+  employeeCode   String?
+  department     String?
+  designation    String?
+  role           MembershipRole @default(employee)
+  dateOfJoining  DateTime?      @map("date_of_joining") @db.Date
+  employmentType EmploymentType @default(FullTime) @map("employment_type")
+  status         EmployeeStatus @default(active)
+
+  paymentMode       String  @default("bank") @map("payment_mode")
+  bankAccountNumber String? @map("bank_account_number")
+  bankIfsc          String? @map("bank_ifsc")
+  bankName          String? @map("bank_name")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  invitationsSent       Invitation[]      @relation("InvitedBy")
+  uploadedDocuments     Document[]        @relation("UploadedBy")
+  uploadedVersions      DocumentVersion[]
+  generatedPayrollRuns  PayrollRun[]
+  payrollEntries        PayrollEntry[]
+  salaryStructures      SalaryStructure[]
+
+  @@unique([userId, companyId], map: "employee_user_company_unique")
+  @@map("employees")
+}
+
+/// Invitation STATUS is deliberately separate from Employee.status — an
+/// invitation resolves once (pending -> accepted/rejected/expired/
+/// cancelled) and never changes again; membership status can keep
+/// changing for as long as someone is associated with a company at all.
+model Invitation {
+  id        String @id @default(uuid())
+  companyId String @map("company_id")
+
+  email       String
+  firstName   String         @map("first_name")
+  lastName    String         @map("last_name")
+  role        MembershipRole
+  department  String?
+  designation String?
+  phone       String?
+
+  // 👇 NEW — Milestone 12 revision: an invitation now carries the full
+  // job/payment details an Admin filled in when adding this person, not
+  // just role/department/designation. acceptInvitation() copies these
+  // onto the real `employees` row once accepted — see invitation.service.ts.
+  employeeCode      String?
+  dateOfJoining     DateTime?       @db.Date @map("date_of_joining")
+  employmentType    EmploymentType? @map("employment_type")
+  paymentMode       String?         @default("bank") @map("payment_mode")
+  bankAccountNumber String?         @map("bank_account_number")
+  bankIfsc          String?         @map("bank_ifsc")
+  bankName          String?         @map("bank_name")
+
+  invitedUserId String? @map("invited_user_id")
+  invitedByEmployeeId String @map("invited_by_employee_id")
+
+  status     InvitationStatus @default(pending)
+  invitedAt  DateTime         @default(now()) @map("invited_at")
+  expiresAt  DateTime         @map("expires_at")
+
+  company        Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  invitedUser    User?     @relation("InvitedUser", fields: [invitedUserId], references: [id], onDelete: SetNull)
+  invitedByEmployee Employee @relation("InvitedBy", fields: [invitedByEmployeeId], references: [id])
+
+  @@map("invitations")
+}
+
+// ---------------------------------------------------------------------------
+// Trade masters
+// ---------------------------------------------------------------------------
+
+model Customer {
+  id        String @id @default(uuid())
+  companyId String @map("company_id")
+
+  name    String
+  country String
+  email   String
+  phone   String
+  address String
+  gstin   String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  invoices Invoice[]
+
+  @@map("customers")
+}
+
+model Vendor {
+  id        String @id @default(uuid())
+  companyId String @map("company_id")
+
+  name     String
+  country  String
+  email    String
+  phone    String
+  address  String
+  gstin    String?
+  category String
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  bills   Bill[]
+
+  @@map("vendors")
+}
+
+model Product {
+  id        String @id @default(uuid())
+  companyId String @map("company_id")
+
+  itemCode String @map("item_code")
+  name     String
+  sku      String
+  category String
+  unit     String
+  hsCode   String  @map("hs_code")
+  /// Postgres `numeric`, not float — money must never round imprecisely.
+  /// Comes back as a Prisma `Decimal`; convert with Number()/.toFixed(2)
+  /// at the point you actually do arithmetic, same rule as before.
+  defaultRate Decimal @map("default_rate") @db.Decimal(12, 2)
+  currency    String  @default("INR")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@map("products")
+}
+
+// ---------------------------------------------------------------------------
+// Export Invoices & Import Bills
+// ---------------------------------------------------------------------------
+
+model Invoice {
+  id        String @id @default(uuid())
+  companyId String @map("company_id")
+  customerId String @map("customer_id")
+
+  invoiceNumber String       @unique @map("invoice_number")
+  currency      String       @default("INR")
+  paymentTerms  PaymentTerms @default(PayLater) @map("payment_terms")
+  advancePercent Int         @default(0) @map("advance_percent")
+
+  /// Shape: { originCountry, destinationCountry, portOfLoading?,
+  /// portOfDischarge?, shippingMethod, incoterm?, shipmentDate? }
+  exportDetails Json @map("export_details")
+  /// The checklist of document names required — not what's uploaded.
+  requiredDocs  Json @default("[]") @map("required_docs")
+
+  status      TransactionStatus @default(Draft)
+  submitted   Boolean           @default(false)
+  submittedAt DateTime?         @map("submitted_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  company  Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer Customer      @relation(fields: [customerId], references: [id])
+  items    InvoiceItem[]
+  payments Payment[]
+  documents Document[]
+  shipments Shipment[]
+
+  @@map("invoices")
+}
+
+/// A real child table, not a JSONB array — line items each have their own
+/// numeric amount that needs to add up correctly.
+model InvoiceItem {
+  id        String  @id @default(uuid())
+  invoiceId String  @map("invoice_id")
+  /// Nullable — a line item can be typed manually, not every product
+  /// comes from the catalog. Deliberately NOT a real foreign key in the
+  /// original schema either (see invoices.ts) — kept the same here.
+  productId String? @map("product_id")
+
+  description String
+  hsCode      String? @map("hs_code")
+  unit        String
+  quantity    Decimal @db.Decimal(12, 2)
+  rate        Decimal @db.Decimal(12, 2)
+  taxPercent  Decimal @default(0) @map("tax_percent") @db.Decimal(5, 2)
+
+  sortOrder Int @default(0) @map("sort_order")
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@map("invoice_items")
+}
+
+model Bill {
+  id        String @id @default(uuid())
+  companyId String @map("company_id")
+  vendorId  String @map("vendor_id")
+
+  billNumber     String       @unique @map("bill_number")
+  currency       String       @default("INR")
+  paymentTerms   PaymentTerms @default(PayLater) @map("payment_terms")
+  advancePercent Int          @default(0) @map("advance_percent")
+
+  /// Shape: { originCountry, destinationCountry, portOfLoading?,
+  /// portOfDischarge?, shippingMethod, customsReference?, shipmentDate? }
+  importDetails Json @map("import_details")
+  requiredDocs  Json @default("[]") @map("required_docs")
+
+  status      TransactionStatus @default(Draft)
+  submitted   Boolean           @default(false)
+  submittedAt DateTime?         @map("submitted_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  vendor    Vendor     @relation(fields: [vendorId], references: [id])
+  items     BillItem[]
+  payments  Payment[]
+  documents Document[]
+  shipments Shipment[]
+
+  @@map("bills")
+}
+
+model BillItem {
+  id     String  @id @default(uuid())
+  billId String  @map("bill_id")
+  productId String? @map("product_id")
+
+  description String
+  hsCode      String? @map("hs_code")
+  unit        String
+  quantity    Decimal @db.Decimal(12, 2)
+  rate        Decimal @db.Decimal(12, 2)
+  taxPercent  Decimal @default(0) @map("tax_percent") @db.Decimal(5, 2)
+
+  sortOrder Int @default(0) @map("sort_order")
+
+  bill Bill @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@map("bill_items")
+}
+
+// ---------------------------------------------------------------------------
+// Payments
+// ---------------------------------------------------------------------------
+
+/// A payment belongs to EXACTLY ONE of an invoice or a bill — never both,
+/// never neither. The original Drizzle schema enforced this with a real
+/// Postgres CHECK constraint (payment_exactly_one_parent), which Prisma's
+/// schema DSL has no declarative equivalent for. See the testing steps
+/// doc for the one-time raw SQL statement that re-adds it after your
+/// first migration — don't skip it, it's real defense-in-depth that was
+/// specifically tested (see moramba-backend/README.md Section 16).
+model Payment {
+  id        String  @id @default(uuid())
+  companyId String  @map("company_id")
+  invoiceId String? @map("invoice_id")
+  billId    String? @map("bill_id")
+
+  amount         Decimal       @db.Decimal(12, 2)
+  currency       String        @default("INR")
+  paymentType    PaymentType   @map("payment_type")
+  method         PaymentMethod @default(bank_transfer)
+  transactionRef String?       @map("transaction_ref")
+  paymentDate    DateTime      @map("payment_date") @db.Date
+  status         PaymentStatus @default(completed)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  company Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  invoice Invoice? @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  bill    Bill?    @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@map("payments")
+}
+
+// ---------------------------------------------------------------------------
+// Documents
+// ---------------------------------------------------------------------------
+
+/// Same "exactly one parent" rule as Payment — see the CHECK-constraint
+/// note on that model, and the testing steps doc for re-adding
+/// document_exactly_one_parent after your first migration.
+model Document {
+  id        String  @id @default(uuid())
+  companyId String  @map("company_id")
+  invoiceId String? @map("invoice_id")
+  billId    String? @map("bill_id")
+
+  category DocumentCategory @default(other)
+  country  String?
+
+  /// The CURRENT version's filename — full history lives in
+  /// DocumentVersion below. Replacing bumps `version` and resets status.
+  fileName             String @map("file_name")
+  version              Int    @default(1)
+  uploadedByEmployeeId String @map("uploaded_by_employee_id")
+
+  status             DocumentStatus @default(PendingVerification)
+  reviewerVerifierId String?        @map("reviewer_verifier_id")
+  reviewerComments   String?        @map("reviewer_comments")
+  rejectionReason    String?        @map("rejection_reason")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  company        Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  invoice        Invoice?          @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  bill           Bill?             @relation(fields: [billId], references: [id], onDelete: Cascade)
+  uploadedBy     Employee          @relation("UploadedBy", fields: [uploadedByEmployeeId], references: [id])
+  reviewer       Verifier?         @relation(fields: [reviewerVerifierId], references: [id])
+  versions       DocumentVersion[]
+
+  @@map("documents")
+}
+
+/// Append-only — a row is added on upload and on every replace, never
+/// edited or deleted.
+model DocumentVersion {
+  id                   String   @id @default(uuid())
+  documentId           String   @map("document_id")
+  version              Int
+  fileName             String   @map("file_name")
+  uploadedByEmployeeId String   @map("uploaded_by_employee_id")
+  uploadedAt           DateTime @default(now()) @map("uploaded_at")
+
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  uploadedBy Employee @relation(fields: [uploadedByEmployeeId], references: [id])
+
+  @@map("document_versions")
+}
+
+// ---------------------------------------------------------------------------
+// Shipments
+// ---------------------------------------------------------------------------
+
+/// Same "exactly one parent" rule as Payment/Document — see the
+/// testing-steps doc for re-adding shipment_exactly_one_parent.
+model Shipment {
+  id        String  @id @default(uuid())
+  companyId String  @map("company_id")
+  invoiceId String? @map("invoice_id")
+  billId    String? @map("bill_id")
+
+  carrier        String
+  trackingNumber String?   @map("tracking_number")
+  origin         String
+  destination    String
+  expectedDate   DateTime? @map("expected_date") @db.Date
+  actualDate     DateTime? @map("actual_date") @db.Date
+
+  status ShipmentStatus @default(Preparing)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  company Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  invoice Invoice?        @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  bill    Bill?           @relation(fields: [billId], references: [id], onDelete: Cascade)
+  events  ShipmentEvent[]
+
+  @@map("shipments")
+}
+
+/// Append-only timeline — one row per status change, never edited.
+model ShipmentEvent {
+  id         String         @id @default(uuid())
+  shipmentId String         @map("shipment_id")
+  status     ShipmentStatus
+  note       String?
+  location   String?
+  occurredAt DateTime       @default(now()) @map("occurred_at")
+
+  shipment Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  @@map("shipment_events")
+}
+
+// ---------------------------------------------------------------------------
+// Payroll
+// ---------------------------------------------------------------------------
+
+/// One row per salary CHANGE, not one row per employee — `effectiveFrom`
+/// means a raise doesn't overwrite history, it adds a new row.
+model SalaryStructure {
+  id         String @id @default(uuid())
+  employeeId String @map("employee_id")
+  companyId  String @map("company_id")
+
+  basic      Decimal @db.Decimal(12, 2)
+  hra        Decimal @default(0) @db.Decimal(12, 2)
+  conveyance Decimal @default(0) @db.Decimal(12, 2)
+  medical    Decimal @default(0) @db.Decimal(12, 2)
+  special    Decimal @default(0) @db.Decimal(12, 2)
+  deductions Decimal @default(0) @db.Decimal(12, 2)
+
+  effectiveFrom DateTime @map("effective_from") @db.Date
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@map("salary_structures")
+}
+
+/// One payroll run per company per month.
+model PayrollRun {
+  id                    String           @id @default(uuid())
+  companyId             String           @map("company_id")
+  month                 String           // "YYYY-MM"
+  status                PayrollRunStatus @default(Pending)
+  generatedByEmployeeId String           @map("generated_by_employee_id")
+  createdAt             DateTime         @default(now()) @map("created_at")
+
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  generatedBy   Employee       @relation(fields: [generatedByEmployeeId], references: [id])
+  entries       PayrollEntry[]
+
+  @@map("payroll_runs")
+}
+
+/// A FROZEN snapshot of one employee's pay for one run — copies the
+/// salary numbers at generation time rather than pointing back at
+/// SalaryStructure, so a later raise never rewrites a past payslip.
+model PayrollEntry {
+  id           String @id @default(uuid())
+  payrollRunId String @map("payroll_run_id")
+  employeeId   String @map("employee_id")
+
+  basic      Decimal @db.Decimal(12, 2)
+  hra        Decimal @db.Decimal(12, 2)
+  conveyance Decimal @db.Decimal(12, 2)
+  medical    Decimal @db.Decimal(12, 2)
+  special    Decimal @db.Decimal(12, 2)
+  grossPay   Decimal @map("gross_pay") @db.Decimal(12, 2)
+  deductions Decimal @db.Decimal(12, 2)
+  netPay     Decimal @map("net_pay") @db.Decimal(12, 2)
+
+  status PayrollEntryStatus @default(Pending)
+  paidAt DateTime?          @map("paid_at")
+
+  payrollRun PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  employee   Employee   @relation(fields: [employeeId], references: [id])
+
+  @@map("payroll_entries")
+}

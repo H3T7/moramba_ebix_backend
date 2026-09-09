@@ -1,12 +1,12 @@
 import { app } from "./app.js";
 import { env } from "./config/env.js";
-import { pool } from "./db/client.js";
+import { prisma } from "./db/client.js";
 
 async function main() {
   // Fail fast if we can't reach Postgres at all — better to crash loudly
   // right now than to accept requests we can't actually fulfill.
   try {
-    await pool.query("SELECT 1");
+    await prisma.$queryRaw`SELECT 1`;
     console.log("✅ Connected to Postgres");
   } catch (err) {
     console.error("❌ Could not connect to Postgres. Is it running? Is DATABASE_URL correct?");

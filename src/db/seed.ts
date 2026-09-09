@@ -1,79 +1,41 @@
-import { db, pool } from "./client.js";
-import {
-  companies,
-  employees,
-  employeeCompanies,
-  verifiers,
-  customers,
-  vendors,
-  products,
-  invitations,
-  invoices,
-  invoiceItems,
-  bills,
-  billItems,
-  payments,
-  documents,
-  documentVersions,
-  shipments,
-  shipmentEvents,
-  salaryStructures,
-  payrollRuns,
-  payrollEntries,
-} from "./schema/index.js";
+import { prisma } from "./client.js";
 import { hashPassword } from "../lib/password.js";
 
 /**
- * WHAT IS A "SEED SCRIPT"?
- * -------------------------
- * A migration creates the SHAPE of your database (tables, columns).
- * A seed script fills it with actual STARTING DATA — in our case, the
- * same demo company + employees + verifier the frontend has been showing
- * as mock data all along. This gives you real accounts to log in with
- * the moment the frontend is wired up to this API.
- *
- * Run it with:  npm run db:seed
- * Safe to re-run — it clears the relevant tables first, so you'll never
- * end up with duplicate demo data.
+ * A migration creates the SHAPE of your database; a seed script fills it
+ * with actual STARTING DATA. Run with: npm run db:seed
+ * Safe to re-run — it clears the relevant tables first.
  */
 
-const DEMO_PASSWORD = "Password123!"; // every seeded employee/verifier uses this — change immediately in anything beyond local dev
+const DEMO_PASSWORD = "Password123!";
 
 async function main() {
   console.log("🌱 Seeding database...");
 
-  // Clearing child tables before parent tables avoids foreign-key errors
-  // (you can't delete a company while an employee still references it).
-  // Every table added since Milestone 5 (Invitations onward) has to be
-  // listed here too, in the right order — this is exactly the bug that
-  // broke re-seeding once Invoices/Documents/Payroll/etc. existed with
-  // real data: forgetting a table here surfaces as a genuinely confusing
-  // "foreign key constraint violated" error pointing at a table you
-  // didn't even touch.
-  await db.delete(payrollEntries);
-  await db.delete(payrollRuns);
-  await db.delete(salaryStructures);
-  await db.delete(shipmentEvents);
-  await db.delete(shipments);
-  await db.delete(documentVersions);
-  await db.delete(documents);
-  await db.delete(payments);
-  await db.delete(invoiceItems);
-  await db.delete(invoices);
-  await db.delete(billItems);
-  await db.delete(bills);
-  await db.delete(invitations);
-  await db.delete(employeeCompanies);
-  await db.delete(employees);
-  await db.delete(customers);
-  await db.delete(vendors);
-  await db.delete(products);
-  await db.delete(companies);
-  await db.delete(verifiers);
+  // Same child-before-parent order as wipe.ts.
+  await prisma.payrollEntry.deleteMany();
+  await prisma.payrollRun.deleteMany();
+  await prisma.salaryStructure.deleteMany();
+  await prisma.shipmentEvent.deleteMany();
+  await prisma.shipment.deleteMany();
+  await prisma.documentVersion.deleteMany();
+  await prisma.document.deleteMany();
+  await prisma.payment.deleteMany();
+  await prisma.invoiceItem.deleteMany();
+  await prisma.invoice.deleteMany();
+  await prisma.billItem.deleteMany();
+  await prisma.bill.deleteMany();
+  await prisma.invitation.deleteMany();
+  await prisma.employee.deleteMany();
+  await prisma.user.deleteMany();
+  await prisma.customer.deleteMany();
+  await prisma.vendor.deleteMany();
+  await prisma.product.deleteMany();
+  await prisma.company.deleteMany();
+  await prisma.verifier.deleteMany();
 
-  const [aurelia] = await db
-    .insert(companies)
-    .values({
+  const aurelia = await prisma.company.create({
+    data: {
       name: "Aurelia Textiles Pvt. Ltd.",
       logoText: "AT",
       logoColor: "#14213D",
@@ -95,12 +57,11 @@ async function main() {
         swiftCode: "HDFCINBB",
         branch: "Ring Road, Surat",
       },
-    })
-    .returning();
+    },
+  });
 
-  const [northbridge] = await db
-    .insert(companies)
-    .values({
+  const northbridge = await prisma.company.create({
+    data: {
       name: "Northbridge Consulting LLP",
       logoText: "NC",
       logoColor: "#1C2C4F",
@@ -122,8 +83,8 @@ async function main() {
         swiftCode: "ICICINBB",
         branch: "BKC, Mumbai",
       },
-    })
-    .returning();
+    },
+  });
 
   const passwordHash = await hashPassword(DEMO_PASSWORD);
 
@@ -136,21 +97,27 @@ async function main() {
   ];
 
   for (const emp of seedEmployees) {
-    const [created] = await db
-      .insert(employees)
-      .values({ ...emp, companyId: aurelia.id, passwordHash })
-      .returning();
+    const user = await prisma.user.create({
+      data: { firstName: emp.firstName, lastName: emp.lastName, email: emp.email, phone: emp.phone, passwordHash },
+    });
 
-    // Every seeded employee gets access to their home company, with a
-    // membership role matching their real-world job function there.
-    const membershipRole = emp.role === "admin" ? "admin" : emp.role;
-    await db.insert(employeeCompanies).values({ employeeId: created.id, companyId: aurelia.id, role: membershipRole });
+    await prisma.employee.create({
+      data: {
+        userId: user.id,
+        companyId: aurelia.id,
+        employeeCode: emp.employeeCode,
+        department: emp.department,
+        designation: emp.designation,
+        role: emp.role,
+        dateOfJoining: new Date(emp.dateOfJoining),
+      },
+    });
 
-    // ...and Karan also gets access to the second company as its Owner, so
-    // you have a real account to test the "Select Company" screen with, and
-    // to see that the SAME person can hold a DIFFERENT role at each company.
+    // Karan also gets access to a second company, as its Owner, so you
+    // have a real account to test the "Select Company" screen with, and
+    // to see the SAME person hold a DIFFERENT role at each company.
     if (emp.employeeCode === "AT-EMP-001") {
-      await db.insert(employeeCompanies).values({ employeeId: created.id, companyId: northbridge.id, role: "owner" });
+      await prisma.employee.create({ data: { userId: user.id, companyId: northbridge.id, role: "owner" } });
     }
   }
 
@@ -160,34 +127,40 @@ async function main() {
     { name: "Fatima Noor", email: "fatima.noor@moramba.com", specialization: "Import Documentation", avatarColor: "#7c5ec4" },
   ];
   for (const v of seedVerifiers) {
-    await db.insert(verifiers).values({ ...v, passwordHash });
+    await prisma.verifier.create({ data: { ...v, passwordHash } });
   }
 
   // ---- Customers (export-side master) ----
-  await db.insert(customers).values([
-    { companyId: aurelia.id, name: "Meridian Retail Group", country: "United States", email: "accounts@meridianretail.com", phone: "+1 212 555 0148", address: "455 Madison Avenue, New York, NY 10022, United States", gstin: "US-EIN-84-3312207" },
-    { companyId: aurelia.id, name: "Sunrise Garments Co.", country: "United Kingdom", email: "billing@sunrisegarments.co.uk", phone: "+44 161 555 0113", address: "Unit 4, Trafford Business Park, Manchester M17 1EH, United Kingdom", gstin: "GB-VAT-778442019" },
-    { companyId: aurelia.id, name: "Kaveri Home Furnishings", country: "Germany", email: "finance@kaverihf.de", phone: "+49 40 555 01827", address: "Speicherstadt 12, 20457 Hamburg, Germany", gstin: "DE-VAT-311244879" },
-    { companyId: aurelia.id, name: "Blue Horizon Exports", country: "United Arab Emirates", email: "ap@bluehorizontrading.ae", phone: "+971 4 555 3312", address: "Jebel Ali Free Zone, Dubai, United Arab Emirates", gstin: "AE-TRN-100234456700003" },
-  ]);
+  await prisma.customer.createMany({
+    data: [
+      { companyId: aurelia.id, name: "Meridian Retail Group", country: "United States", email: "accounts@meridianretail.com", phone: "+1 212 555 0148", address: "455 Madison Avenue, New York, NY 10022, United States", gstin: "US-EIN-84-3312207" },
+      { companyId: aurelia.id, name: "Sunrise Garments Co.", country: "United Kingdom", email: "billing@sunrisegarments.co.uk", phone: "+44 161 555 0113", address: "Unit 4, Trafford Business Park, Manchester M17 1EH, United Kingdom", gstin: "GB-VAT-778442019" },
+      { companyId: aurelia.id, name: "Kaveri Home Furnishings", country: "Germany", email: "finance@kaverihf.de", phone: "+49 40 555 01827", address: "Speicherstadt 12, 20457 Hamburg, Germany", gstin: "DE-VAT-311244879" },
+      { companyId: aurelia.id, name: "Blue Horizon Exports", country: "United Arab Emirates", email: "ap@bluehorizontrading.ae", phone: "+971 4 555 3312", address: "Jebel Ali Free Zone, Dubai, United Arab Emirates", gstin: "AE-TRN-100234456700003" },
+    ],
+  });
 
   // ---- Vendors (import-side master) ----
-  await db.insert(vendors).values([
-    { companyId: aurelia.id, name: "Guangzhou Silk Weaving Co.", country: "China", email: "sales@gzsilk.cn", phone: "+86 20 3891 2200", address: "18 Textile Ave, Panyu District, Guangzhou, China", gstin: "91442000MA5CJ8Q", category: "Raw Material" },
-    { companyId: aurelia.id, name: "PowerGrid Utilities", country: "India", email: "billing@powergrid.example", phone: "1800 233 3435", address: "Utility Bhavan, Surat, GJ, India", gstin: "24AAACP1234J1ZL", category: "Utilities" },
-    { companyId: aurelia.id, name: "Anatolia Dyestuff Industries", country: "Turkey", email: "export@anatoliadye.com.tr", phone: "+90 212 553 4410", address: "Organize Sanayi Bölgesi, Istanbul, Turkey", gstin: "TR-8802214410", category: "Raw Material" },
-    { companyId: aurelia.id, name: "Swift Freight Forwarders Pvt Ltd", country: "India", email: "ops@swiftfreight.in", phone: "+91 90330 44556", address: "Sachin GIDC, Surat, GJ, India", gstin: "24AACCS7788K1Z7", category: "Logistics" },
-  ]);
+  await prisma.vendor.createMany({
+    data: [
+      { companyId: aurelia.id, name: "Guangzhou Silk Weaving Co.", country: "China", email: "sales@gzsilk.cn", phone: "+86 20 3891 2200", address: "18 Textile Ave, Panyu District, Guangzhou, China", gstin: "91442000MA5CJ8Q", category: "Raw Material" },
+      { companyId: aurelia.id, name: "PowerGrid Utilities", country: "India", email: "billing@powergrid.example", phone: "1800 233 3435", address: "Utility Bhavan, Surat, GJ, India", gstin: "24AAACP1234J1ZL", category: "Utilities" },
+      { companyId: aurelia.id, name: "Anatolia Dyestuff Industries", country: "Turkey", email: "export@anatoliadye.com.tr", phone: "+90 212 553 4410", address: "Organize Sanayi Bölgesi, Istanbul, Turkey", gstin: "TR-8802214410", category: "Raw Material" },
+      { companyId: aurelia.id, name: "Swift Freight Forwarders Pvt Ltd", country: "India", email: "ops@swiftfreight.in", phone: "+91 90330 44556", address: "Sachin GIDC, Surat, GJ, India", gstin: "24AACCS7788K1Z7", category: "Logistics" },
+    ],
+  });
 
-  // ---- Products (catalog referenced by future invoice/bill line items) ----
-  await db.insert(products).values([
-    { companyId: aurelia.id, itemCode: "AT-ITM-1001", name: "Cotton Fabric Roll - 60\"", sku: "CTN-60-RL", category: "Fabric", unit: "meters", hsCode: "5208.52", defaultRate: "145.00", currency: "INR" },
-    { companyId: aurelia.id, itemCode: "AT-ITM-1002", name: "Polyester Blend Fabric", sku: "PLY-BLD-30", category: "Fabric", unit: "meters", hsCode: "5407.61", defaultRate: "98.00", currency: "INR" },
-    { companyId: aurelia.id, itemCode: "AT-ITM-1003", name: "Home Furnishing Linen", sku: "LIN-HF-20", category: "Fabric", unit: "meters", hsCode: "5309.19", defaultRate: "210.00", currency: "INR" },
-    { companyId: aurelia.id, itemCode: "AT-ITM-1004", name: "Export Grade Denim", sku: "DNM-EXP-80", category: "Fabric", unit: "meters", hsCode: "5209.42", defaultRate: "165.00", currency: "INR" },
-    { companyId: aurelia.id, itemCode: "AT-ITM-1005", name: "Raw Silk Yarn - 40s Count", sku: "SLK-40-YRN", category: "Raw Material", unit: "kg", hsCode: "5004.00", defaultRate: "210.00", currency: "INR" },
-    { companyId: aurelia.id, itemCode: "AT-ITM-1006", name: "Reactive Dyestuff", sku: "DYE-RCT-06", category: "Raw Material", unit: "drums", hsCode: "3204.16", defaultRate: "42000.00", currency: "INR" },
-  ]);
+  // ---- Products ----
+  await prisma.product.createMany({
+    data: [
+      { companyId: aurelia.id, itemCode: "AT-ITM-1001", name: "Cotton Fabric Roll - 60\"", sku: "CTN-60-RL", category: "Fabric", unit: "meters", hsCode: "5208.52", defaultRate: "145.00", currency: "INR" },
+      { companyId: aurelia.id, itemCode: "AT-ITM-1002", name: "Polyester Blend Fabric", sku: "PLY-BLD-30", category: "Fabric", unit: "meters", hsCode: "5407.61", defaultRate: "98.00", currency: "INR" },
+      { companyId: aurelia.id, itemCode: "AT-ITM-1003", name: "Home Furnishing Linen", sku: "LIN-HF-20", category: "Fabric", unit: "meters", hsCode: "5309.19", defaultRate: "210.00", currency: "INR" },
+      { companyId: aurelia.id, itemCode: "AT-ITM-1004", name: "Export Grade Denim", sku: "DNM-EXP-80", category: "Fabric", unit: "meters", hsCode: "5209.42", defaultRate: "165.00", currency: "INR" },
+      { companyId: aurelia.id, itemCode: "AT-ITM-1005", name: "Raw Silk Yarn - 40s Count", sku: "SLK-40-YRN", category: "Raw Material", unit: "kg", hsCode: "5004.00", defaultRate: "210.00", currency: "INR" },
+      { companyId: aurelia.id, itemCode: "AT-ITM-1006", name: "Reactive Dyestuff", sku: "DYE-RCT-06", category: "Raw Material", unit: "drums", hsCode: "3204.16", defaultRate: "42000.00", currency: "INR" },
+    ],
+  });
 
   console.log("✅ Seed complete.");
   console.log("");
@@ -197,10 +170,11 @@ async function main() {
   console.log("   Verification Portal logins (same password):");
   seedVerifiers.forEach((v) => console.log(`     ${v.email}`));
 
-  await pool.end();
+  await prisma.$disconnect();
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error("❌ Seed failed:", err);
+  await prisma.$disconnect();
   process.exit(1);
 });

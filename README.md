@@ -2,13 +2,17 @@
 
 A real, working API for the Moramba frontend — Node.js + TypeScript + PostgreSQL.
 
-This README assumes you're new to backend development. Every step is spelled out. If a command's output doesn't match what's described, stop and re-read the step before moving on — most problems come from skipping one small thing.
-
----
+> ## ⚠️ ORM switched: Drizzle → Prisma
+>
+> This backend was originally built on Drizzle ORM. It has since been switched to **Prisma** — the schema is now `prisma/schema.prisma`, and every service file was rewritten to Prisma Client syntax.
+>
+> **Start here:** [`PRISMA_TESTING_STEPS.md`](./PRISMA_TESTING_STEPS.md) — a full step-by-step guide to install, migrate, seed, and verify the Prisma version actually works. **This code has not been run in the sandbox it was written in** (Prisma's engine binary is hosted at `binaries.prisma.sh`, which that sandbox's network couldn't reach) — you are the first real test of it. The testing doc includes a full checklist covering every major flow.
+>
+> Everything below this notice was written while the backend still ran on Drizzle. It's left in place as-is because it's still accurate **history** of how and why each module was built and tested (the reasoning behind every design decision hasn't changed) — but any command shown as `drizzle-kit ...` is now `prisma ...` (see the testing doc for the current equivalents), and code snippets referencing `db.query...`/`db.insert(...)` describe the old implementation, not the current one.
 
 ## 1. What's actually here right now
 
-This is **Milestone 11**: the ENTIRE planned backend surface, all fully working and tested — Auth + Employees + Customers + Vendors + Products + Company Memberships & Invitations + Export Invoices & Import Bills + Payments + Documents + Shipments + Payroll + **Verification Portal**.
+This is **Milestone 12**: every module from Milestone 11, now on a corrected **Users vs. Employees** identity model (see Section 28) — a real person is a `user`; their role, department, and everything else company-specific lives on a separate `employees` row per company they belong to.
 
 | Piece | Status |
 |---|---|
@@ -506,3 +510,45 @@ The frontend swaps this in immediately via a new `refreshToken` Redux action (up
 **Fixed** by normalizing every email to lowercase at the point it's written — `registerEmployee`, `loginEmployee`, and `createInvitation` all lowercase now — plus a defensive lowercase on the read side in `listMyPendingInvitations` too, so it's correct regardless of what called it.
 
 **Tested with the exact mismatched-case scenario:** invited `New.Employee@Example.COM`, registered as `new.employee@example.com`, confirmed the invitation was found (`1 invitation(s) found`) where it previously would have returned zero.
+
+## 28. A real architectural gap: `employees` was trying to be two things at once
+
+Reported directly: "user is main for us" — one person can belong to many companies, one company has many people, and email must be unique at the PERSON level, not per company-membership. The backend didn't actually support this correctly. `employees` was doing double duty as both "the login identity" (email, password, name) AND "a specific company membership" (role, department, employee code) at the same time, which meant there was never really a clean way to represent "this one person, across all the companies they belong to."
+
+### The fix: split `users` (identity) from `employees` (per-company membership)
+
+- **`users`** — the real, global identity. One row per person, ever. Email is unique HERE. No companyId, no role, no department — this table knows nothing about companies at all.
+- **`employees`** — one row per **(user, company) pair**. This is where role, department, designation, employee code, and bank details live, because all of those are genuinely specific to one person's relationship with one company. The old `employee_companies` join table is gone entirely — `employees` itself now IS the membership, not a profile that points at a separate join row.
+
+This is a bigger, more correct model: the same person can now be Owner at one company and a plain Employee at another, with completely independent department/designation/bank details at each — properly, not through the two-different-role-fields hack from the previous milestone.
+
+### A genuinely nice side effect: the "stale role until re-login" bug is now structurally impossible
+
+Two milestones ago, a JWT carried a `role` claim that could go stale (Section 27). The real fix wasn't refreshing the token faster — it was realizing a token should never have carried a role at all, once role became something that only makes sense **per company**. The JWT now only ever contains `{ sub: userId, type: "user" }`. Role is resolved fresh from the database on every single request, scoped to whichever company that request is actually about (`requireCompanyRole` in `middleware/auth.ts`). There is no cached claim left to go stale, so the bug isn't patched — it's gone by construction.
+
+### The rule from the brief, now actually enforced
+
+"If we find the user is already registered, we just send a company invite" — `employee.service.ts`'s `createEmployee` now checks `users` by email before doing anything: if that email already has an account, this creates a real **invitation** instead of a second account (delegating straight into `invitation.service.ts`'s `createInvitation`); only for a genuinely new email does it create both a `users` row (with a temporary password, `FirstnameLastname@123`, exactly per the brief) and an `employees` row directly, active immediately with no invitation step.
+
+### Migration approach
+
+Given the sheer size of this reshape (one new table, one table restructured with new required columns, one table dropped, a foreign key retargeted), and that the database was already being tested from a wiped, empty state, I reset the migration history entirely and generated one fresh migration from the final schema rather than layering incremental `ALTER`s on top of the old shape. `npm run db:migrate` now applies that single migration to a truly empty database.
+
+### Two real bugs caught during this rewrite, not shipped blind
+
+- **`replaceDocument`** still referenced the pre-rename field name after `documents.reviewerEmployeeId` became `reviewerVerifierId` two milestones ago — TypeScript's `--noEmit` check refused to compile it.
+- **`document.controller.ts`'s `upload`/`replace` and `payroll.controller.ts`'s `generateRun`** were passing `req.user.sub` (a `userId`) into fields that expect an `employees.id` — a mistake TypeScript literally cannot catch, since both are just UUID strings. Caught by manually auditing every `req.user.sub` usage across every controller after the restructure, not by any automated check, and fixed to use `req.employee.id` (the caller's own row at the specific company being acted on, resolved by `requireCompanyRole`).
+
+### Tested against a real, freshly-migrated, empty database
+
+- Logged in as a seeded user with two companies → confirmed `owner` at one, `admin` at the other, on the SAME `employees.role` field, correctly independent
+- Decoded the JWT directly → confirmed zero role claim, only `{ sub, type }`
+- Added a brand-new employee (no existing account) → confirmed a `users` + `employees` row were created directly, with a working temporary password (`FreshPerson@123`) that could log in immediately
+- Added an employee whose email **already had an account** → confirmed the response was `{ type: "invitation", ... }`, not a duplicate account, and confirmed via direct SQL that exactly one `users` row exists for that email, not two
+- Accepted an invitation for someone already active at that same company → confirmed the existing `employees` row was reactivated/updated (via `onConflictDoUpdate`) rather than erroring
+- Confirmed real per-request RBAC: the same person, at a company where they hold a lower role, was correctly blocked (`403`) from an action they're allowed to do at a DIFFERENT company where they hold a higher one
+- Confirmed the Verification Portal (a completely separate identity system) was entirely unaffected by any of this
+
+## 29. Known follow-up: the frontend needs a matching pass
+
+This response covered the backend only — it's a large enough change on its own. The frontend currently reads `employee.companyId` in a few places (notably `LoginPage.jsx`'s post-login routing) to decide "does this person have exactly one company, so auto-select it." That field no longer exists on the response at all (`users` has no companyId — see above), so that specific check needs to switch to reading `accessibleCompanies.length` instead, which is arguably more correct anyway since it was always the real source of truth. This hasn't been done yet — flagging it explicitly rather than leaving it to be discovered as another confusing "why doesn't this work" bug report.

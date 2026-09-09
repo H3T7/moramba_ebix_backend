@@ -27,8 +27,17 @@ export async function getOne(req: Request, res: Response) {
 
 export async function create(req: Request, res: Response) {
   const input = createEmployeeSchema.parse(req.body);
-  const employee = await createEmployee(req.params.companyId as string, input);
-  res.status(201).json(employee);
+  // req.employee is the CALLER's own row at this company, resolved by
+  // requireCompanyParamRole — needed here because if this email already
+  // has an account, createEmployee redirects into creating a real
+  // invitation instead (see employee.service.ts), and an invitation needs
+  // to record who sent it.
+  const result = await createEmployee(req.params.companyId as string, req.employee!.id, input);
+  if (result.type === "invitation") {
+    res.status(200).json({ type: "invitation", invitation: result.invitation });
+  } else {
+    res.status(201).json({ type: "employee", employee: result.employee, temporaryPassword: result.temporaryPassword });
+  }
 }
 
 export async function update(req: Request, res: Response) {

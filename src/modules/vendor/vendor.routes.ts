@@ -1,14 +1,16 @@
 import { Router } from "express";
 import { list, getOne, create, update, remove } from "./vendor.controller.js";
-import { requireAuth, requireRole } from "../../middleware/auth.js";
+import { requireAuth, requireCompanyParamRole, requireCompanyRole, companyIdFromRecord } from "../../middleware/auth.js";
+import { prisma } from "../../db/client.js";
 
-/** Same nested-resource + RBAC pattern as Customers — Admin + Accountant only. */
 export const vendorRouter = Router();
 export const companyVendorRouter = Router();
 
-companyVendorRouter.get("/:companyId/vendors", requireAuth, requireRole("admin", "accountant"), list);
-companyVendorRouter.post("/:companyId/vendors", requireAuth, requireRole("admin", "accountant"), create);
+const companyIdFromVendor = companyIdFromRecord((id) => prisma.vendor.findUnique({ where: { id } }), "Vendor not found.");
 
-vendorRouter.get("/:id", requireAuth, requireRole("admin", "accountant"), getOne);
-vendorRouter.patch("/:id", requireAuth, requireRole("admin", "accountant"), update);
-vendorRouter.delete("/:id", requireAuth, requireRole("admin", "accountant"), remove);
+companyVendorRouter.get("/:companyId/vendors", requireAuth, requireCompanyParamRole("admin", "accountant"), list);
+companyVendorRouter.post("/:companyId/vendors", requireAuth, requireCompanyParamRole("admin", "accountant"), create);
+
+vendorRouter.get("/:id", requireAuth, requireCompanyRole(companyIdFromVendor, "admin", "accountant"), getOne);
+vendorRouter.patch("/:id", requireAuth, requireCompanyRole(companyIdFromVendor, "admin", "accountant"), update);
+vendorRouter.delete("/:id", requireAuth, requireCompanyRole(companyIdFromVendor, "admin", "accountant"), remove);

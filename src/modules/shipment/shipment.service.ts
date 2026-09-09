@@ -1,28 +1,26 @@
-import { eq, and, desc } from "drizzle-orm";
-import { db } from "../../db/client.js";
-import { shipments, shipmentEvents, invoices, bills } from "../../db/schema/index.js";
+import { prisma } from "../../db/client.js";
 import { AppError } from "../../middleware/errorHandler.js";
+import { shipmentStatusToPrisma } from "../../lib/prismaEnumMaps.js";
 import type { CreateShipmentInput, UpdateShipmentInput } from "./shipment.schema.js";
 
 async function assertParentBelongsToCompany(companyId: string, invoiceId?: string, billId?: string) {
   if (invoiceId) {
-    const invoice = await db.query.invoices.findFirst({ where: and(eq(invoices.id, invoiceId), eq(invoices.companyId, companyId)) });
+    const invoice = await prisma.invoice.findFirst({ where: { id: invoiceId, companyId } });
     if (!invoice) throw new AppError(404, "That invoice doesn't exist for this company.");
   }
   if (billId) {
-    const bill = await db.query.bills.findFirst({ where: and(eq(bills.id, billId), eq(bills.companyId, companyId)) });
+    const bill = await prisma.bill.findFirst({ where: { id: billId, companyId } });
     if (!bill) throw new AppError(404, "That bill doesn't exist for this company.");
   }
 }
 
-/** Creating a shipment also writes its first timeline event, in one transaction — same pattern as every other parent+child insert in this API. */
+/** Creating a shipment also writes its first timeline event, in one transaction. */
 export async function createShipment(companyId: string, input: CreateShipmentInput) {
   await assertParentBelongsToCompany(companyId, input.invoiceId, input.billId);
 
-  return db.transaction(async (tx) => {
-    const [shipment] = await tx
-      .insert(shipments)
-      .values({
+  return prisma.$transaction(async (tx) => {
+    const shipment = await tx.shipment.create({
+      data: {
         companyId,
         invoiceId: input.invoiceId,
         billId: input.billId,
@@ -31,68 +29,65 @@ export async function createShipment(companyId: string, input: CreateShipmentInp
         origin: input.origin,
         destination: input.destination,
         expectedDate: input.expectedDate,
-      })
-      .returning();
+      },
+    });
 
-    await tx.insert(shipmentEvents).values({ shipmentId: shipment.id, status: "Preparing", note: "Shipment created" });
+    await tx.shipmentEvent.create({ data: { shipmentId: shipment.id, status: "Preparing", note: "Shipment created" } });
 
     return shipment;
   });
 }
 
 export async function listShipmentsByCompany(companyId: string) {
-  return db.select().from(shipments).where(eq(shipments.companyId, companyId));
+  return prisma.shipment.findMany({ where: { companyId } });
 }
 
 export async function listShipmentsForTransaction(transactionType: "invoice" | "bill", transactionId: string) {
-  const column = transactionType === "invoice" ? shipments.invoiceId : shipments.billId;
-  return db.select().from(shipments).where(eq(column, transactionId));
+  return prisma.shipment.findMany({
+    where: transactionType === "invoice" ? { invoiceId: transactionId } : { billId: transactionId },
+  });
 }
 
 export async function getShipment(id: string) {
-  const shipment = await db.query.shipments.findFirst({ where: eq(shipments.id, id) });
+  const shipment = await prisma.shipment.findUnique({ where: { id } });
   if (!shipment) throw new AppError(404, "Shipment not found.");
-  const timeline = await db.select().from(shipmentEvents).where(eq(shipmentEvents.shipmentId, id)).orderBy(desc(shipmentEvents.occurredAt));
+  const timeline = await prisma.shipmentEvent.findMany({ where: { shipmentId: id }, orderBy: { occurredAt: "desc" } });
   return { ...shipment, timeline };
 }
 
 export async function updateShipment(id: string, input: UpdateShipmentInput) {
-  const [updated] = await db.update(shipments).set({ ...input, updatedAt: new Date() }).where(eq(shipments.id, id)).returning();
+  const updated = await prisma.shipment.update({ where: { id }, data: input }).catch(() => null);
   if (!updated) throw new AppError(404, "Shipment not found.");
   return updated;
 }
 
 /**
  * Every status change is a new timeline event, not an edit to the old
- * one — this is what lets the shipment detail view show a real history
- * ("Preparing → In Transit → Customs → Delivered", each with its own
- * timestamp), not just the current state with no memory of how it got
- * there. "Delivered" also stamps actualDate automatically.
+ * one. "Delivered" also stamps actualDate automatically.
  */
 export async function updateShipmentStatus(id: string, status: string, note?: string, location?: string) {
-  const existing = await db.query.shipments.findFirst({ where: eq(shipments.id, id) });
+  const existing = await prisma.shipment.findUnique({ where: { id } });
   if (!existing) throw new AppError(404, "Shipment not found.");
 
-  return db.transaction(async (tx) => {
-    const [updated] = await tx
-      .update(shipments)
-      .set({
-        status: status as typeof shipments.$inferSelect.status,
-        actualDate: status === "Delivered" ? new Date().toISOString().slice(0, 10) : existing.actualDate,
-        updatedAt: new Date(),
-      })
-      .where(eq(shipments.id, id))
-      .returning();
+  const prismaStatus = shipmentStatusToPrisma[status] as never;
 
-    await tx.insert(shipmentEvents).values({ shipmentId: id, status: status as typeof shipments.$inferSelect.status, note, location });
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.shipment.update({
+      where: { id },
+      data: {
+        status: prismaStatus,
+        actualDate: status === "Delivered" ? new Date() : existing.actualDate,
+      },
+    });
+
+    await tx.shipmentEvent.create({ data: { shipmentId: id, status: prismaStatus, note, location } });
 
     return updated;
   });
 }
 
 export async function deleteShipment(id: string) {
-  const existing = await db.query.shipments.findFirst({ where: eq(shipments.id, id) });
-  if (!existing) throw new AppError(404, "Shipment not found.");
-  await db.delete(shipments).where(eq(shipments.id, id));
-  return { id };
+  const deleted = await prisma.shipment.delete({ where: { id } }).catch(() => null);
+  if (!deleted) throw new AppError(404, "Shipment not found.");
+  return { id: deleted.id };
 }

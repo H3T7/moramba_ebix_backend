@@ -14,7 +14,13 @@ import { AppError } from "../../middleware/errorHandler.js";
 
 export async function upload(req: Request, res: Response) {
   const input = uploadDocumentSchema.parse(req.body);
-  const doc = await uploadDocument(req.params.companyId as string, req.user!.sub, input);
+  // req.employee (the CALLER's own row at this company, resolved by
+  // requireCompanyParamRole) — NOT req.user.sub, which is a userId, not
+  // an employees.id. Passing the wrong one here would silently succeed
+  // (both are just UUID strings, so TypeScript can't catch this) and
+  // corrupt uploadedByEmployeeId with a value that isn't a real row in
+  // the employees table at all.
+  const doc = await uploadDocument(req.params.companyId as string, req.employee!.id, input);
   res.status(201).json(doc);
 }
 
@@ -37,7 +43,7 @@ export async function getOne(req: Request, res: Response) {
 
 export async function replace(req: Request, res: Response) {
   const { fileName } = replaceDocumentSchema.parse(req.body);
-  const doc = await replaceDocument(req.params.id as string, req.user!.sub, fileName);
+  const doc = await replaceDocument(req.params.id as string, req.employee!.id, fileName);
   res.status(200).json(doc);
 }
 

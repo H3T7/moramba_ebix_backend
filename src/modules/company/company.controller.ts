@@ -1,25 +1,23 @@
 import type { Request, Response } from "express";
 import { createCompanySchema } from "./company.schema.js";
 import { createCompany, listCompanies, getCompanyById } from "./company.service.js";
-import { signEmployeeToken } from "../../lib/jwt.js";
 import { AppError } from "../../middleware/errorHandler.js";
 
 /**
- * A JWT is signed ONCE and never auto-updates — it's not a live lookup, it
- * just carries whatever `role` was true the moment someone logged in. If
- * creating this company just made them Owner/Admin for the first time
- * (see company.service.ts), the token they're still holding says
- * "employee." Reported bug: the sidebar stayed stuck on the bare-minimum
- * Employee view until logging out and back in — because nothing ever
- * refreshed the token. Fixed by signing and returning a NEW token here,
- * right alongside the created company, so the frontend can swap it in
- * immediately with no extra round-trip and no re-login required.
+ * No token-refresh dance needed here anymore, unlike an earlier version of
+ * this function. That was only ever a workaround for the JWT carrying a
+ * `role` claim that could go stale the moment someone's role changed.
+ * Now that role is resolved fresh from the database on every request (see
+ * requireCompanyRole in middleware/auth.ts) instead of trusted from the
+ * token, there's nothing on the token that COULD go stale — the original
+ * token from login/register stays valid and correct for its entire
+ * lifetime, no matter how many companies someone creates or joins after
+ * getting it.
  */
 export async function create(req: Request, res: Response) {
   const input = createCompanySchema.parse(req.body);
-  const { company, employee } = await createCompany(req.user!.sub, input);
-  const token = signEmployeeToken({ sub: employee!.id, role: employee!.role, type: "employee" });
-  res.status(201).json({ ...company, token });
+  const { company } = await createCompany(req.user!.sub, input);
+  res.status(201).json(company);
 }
 
 export async function list(_req: Request, res: Response) {
