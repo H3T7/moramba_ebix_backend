@@ -64,6 +64,8 @@ export async function createBill(companyId: string, input: CreateBillInput) {
         create: input.items.map((item, idx) => ({
           productId: item.productId,
           description: item.description,
+          itemCode: item.itemCode,
+          sku: item.sku,
           hsCode: item.hsCode,
           unit: item.unit,
           quantity: item.quantity.toFixed(2),
@@ -97,6 +99,8 @@ export async function updateBill(id: string, input: UpdateBillInput) {
           billId: id,
           productId: item.productId,
           description: item.description,
+          itemCode: item.itemCode,
+          sku: item.sku,
           hsCode: item.hsCode,
           unit: item.unit,
           quantity: item.quantity.toFixed(2),

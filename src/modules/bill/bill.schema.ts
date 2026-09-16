@@ -3,6 +3,8 @@ import { z } from "zod";
 const itemSchema = z.object({
   productId: z.string().uuid().optional(),
   description: z.string().min(1, "Description is required"),
+  itemCode: z.string().optional(),
+  sku: z.string().optional(),
   hsCode: z.string().optional(),
   unit: z.string().min(1, "Unit is required"),
   quantity: z.coerce.number().positive("Quantity must be greater than 0"),
@@ -18,6 +20,11 @@ const importDetailsSchema = z.object({
   shippingMethod: z.string().min(1),
   customsReference: z.string().optional(),
   shipmentDate: z.string().optional(),
+  // Both new — importDetails is stored as JSON (see schema.prisma's Bill
+  // model), so adding fields here needs no migration, unlike the item
+  // itemCode/sku columns above.
+  incoterms: z.string().optional(),
+  importType: z.string().optional(),
 });
 
 export const createBillSchema = z.object({

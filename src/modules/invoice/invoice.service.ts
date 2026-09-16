@@ -78,6 +78,8 @@ export async function createInvoice(companyId: string, input: CreateInvoiceInput
         create: input.items.map((item, idx) => ({
           productId: item.productId,
           description: item.description,
+          itemCode: item.itemCode,
+          sku: item.sku,
           hsCode: item.hsCode,
           unit: item.unit,
           quantity: item.quantity.toFixed(2),
@@ -116,6 +118,8 @@ export async function updateInvoice(id: string, input: UpdateInvoiceInput) {
           invoiceId: id,
           productId: item.productId,
           description: item.description,
+          itemCode: item.itemCode,
+          sku: item.sku,
           hsCode: item.hsCode,
           unit: item.unit,
           quantity: item.quantity.toFixed(2),

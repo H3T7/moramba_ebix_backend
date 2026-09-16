@@ -3,6 +3,8 @@ import { z } from "zod";
 const itemSchema = z.object({
   productId: z.string().uuid().optional(),
   description: z.string().min(1, "Description is required"),
+  itemCode: z.string().optional(),
+  sku: z.string().optional(),
   hsCode: z.string().optional(),
   unit: z.string().min(1, "Unit is required"),
   quantity: z.coerce.number().positive("Quantity must be greater than 0"),

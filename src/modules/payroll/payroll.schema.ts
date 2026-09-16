@@ -7,7 +7,15 @@ export const createSalaryStructureSchema = z.object({
   conveyance: z.coerce.number().min(0).default(0),
   medical: z.coerce.number().min(0).default(0),
   special: z.coerce.number().min(0).default(0),
-  deductions: z.coerce.number().min(0).default(0),
+  // Itemized breakdown (all optional, default 0) — `deductions` is still
+  // accepted directly for backward compatibility, but when it's omitted
+  // it's computed server-side as pf + tax + otherDeductions (see
+  // payroll.service.ts's createSalaryStructure) rather than defaulting to
+  // 0 and silently losing the breakdown the caller sent.
+  pf: z.coerce.number().min(0).default(0),
+  tax: z.coerce.number().min(0).default(0),
+  otherDeductions: z.coerce.number().min(0).default(0),
+  deductions: z.coerce.number().min(0).optional(),
   effectiveFrom: z.string().min(1, "Effective date is required"),
 });
 export type CreateSalaryStructureInput = z.infer<typeof createSalaryStructureSchema>;

@@ -6,6 +6,12 @@ export async function createSalaryStructure(companyId: string, input: CreateSala
   const employee = await prisma.employee.findFirst({ where: { id: input.employeeId, companyId } });
   if (!employee) throw new AppError(404, "That employee doesn't exist for this company.");
 
+  // `deductions` (the total) stays authoritative for every existing piece
+  // of payroll math that already reads it — computed from the itemized
+  // breakdown when the caller didn't send a total directly, rather than
+  // defaulting to 0 and quietly dropping pf/tax/otherDeductions.
+  const deductions = input.deductions ?? input.pf + input.tax + input.otherDeductions;
+
   return prisma.salaryStructure.create({
     data: {
       employeeId: input.employeeId,
@@ -15,7 +21,10 @@ export async function createSalaryStructure(companyId: string, input: CreateSala
       conveyance: input.conveyance.toFixed(2),
       medical: input.medical.toFixed(2),
       special: input.special.toFixed(2),
-      deductions: input.deductions.toFixed(2),
+      pf: input.pf.toFixed(2),
+      tax: input.tax.toFixed(2),
+      otherDeductions: input.otherDeductions.toFixed(2),
+      deductions: deductions.toFixed(2),
       effectiveFrom: input.effectiveFrom,
     },
   });
