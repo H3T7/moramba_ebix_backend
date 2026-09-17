@@ -25,6 +25,12 @@ const importDetailsSchema = z.object({
   // itemCode/sku columns above.
   incoterms: z.string().optional(),
   importType: z.string().optional(),
+  // Both new — importDetails is stored as JSON, so no migration needed
+  // (same as incoterms/importType above). normalizeBill() on the frontend
+  // flattens these back out to top-level bill.billDate/dueDate, which the
+  // dashboard/PDF/detail pages all expect.
+  billDate: z.string().optional(),
+  dueDate: z.string().optional(),
 });
 
 export const createBillSchema = z.object({

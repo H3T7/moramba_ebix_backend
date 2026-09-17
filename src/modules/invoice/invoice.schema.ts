@@ -20,6 +20,13 @@ const exportDetailsSchema = z.object({
   shippingMethod: z.string().min(1),
   incoterm: z.string().optional(),
   shipmentDate: z.string().optional(),
+  // Both new — exportDetails is stored as JSON (see schema.prisma's Invoice
+  // model), so adding fields here needs no migration, same as incoterm
+  // above. The frontend's normalizeInvoice() flattens these back out to
+  // top-level invoice.issueDate/dueDate, which the dashboard/PDF/detail
+  // pages all expect (see moramba-ebix-frontend/src/modules/invoice/slice.js).
+  issueDate: z.string().optional(),
+  dueDate: z.string().optional(),
 });
 
 export const createInvoiceSchema = z.object({
