@@ -48,6 +48,9 @@ export async function createInvitation(companyId: string, invitedByEmployeeId: s
       department: input.department,
       designation: input.designation,
       phone: input.phone,
+      dob: input.dob ? new Date(input.dob) : undefined,
+      gender: input.gender,
+      address: input.address,
 
       // Milestone 12 revision — job/payment details the Admin filled in
       // on the "Add employee" form now travel WITH the invitation, so
@@ -133,6 +136,19 @@ export async function acceptInvitation(invitationId: string, acceptingUser: { id
 
   const { invite: updatedInvite, employee } = await prisma.$transaction(async (tx) => {
     const updatedInvite = await tx.invitation.update({ where: { id: invite.id }, data: { status: "accepted" } });
+
+    // dob/gender/address live on `users`, not `employees` — copy them onto
+    // the accepting user's own row here, same reasoning as the
+    // employeeData block below for job/payment details: don't let them
+    // silently vanish just because they arrived via the invitation instead
+    // of a direct signup. Only patches fields the invite actually carried.
+    const userPatch: Record<string, unknown> = {};
+    if (invite.dob) userPatch.dob = invite.dob;
+    if (invite.gender) userPatch.gender = invite.gender;
+    if (invite.address) userPatch.address = invite.address;
+    if (Object.keys(userPatch).length > 0) {
+      await tx.user.update({ where: { id: acceptingUser.id }, data: userPatch });
+    }
 
     const employeeData = {
       role: invite.role,

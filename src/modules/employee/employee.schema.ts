@@ -12,6 +12,9 @@ export const createEmployeeSchema = z.object({
   lastName: z.string().min(1),
   email: z.string().email(),
   phone: z.string().min(7),
+  dob: z.string().min(1),
+  gender: z.string().min(1),
+  address: z.string().min(4),
 
   employeeCode: z.string().min(2),
   department: z.string().min(1),

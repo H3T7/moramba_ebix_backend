@@ -10,6 +10,9 @@ export const createInvitationSchema = z.object({
   department: z.string().optional(),
   designation: z.string().optional(),
   phone: z.string().optional(),
+  dob: z.string().optional(),
+  gender: z.string().optional(),
+  address: z.string().optional(),
 
   // Milestone 12 revision: an invitation now carries the same job/payment
   // details the "Add employee" form collects, so acceptInvitation() can

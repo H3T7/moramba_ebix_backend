@@ -27,3 +27,25 @@ export function mapEmploymentType(value: string) {
   if (!mapped) throw new AppError(400, `Invalid employment type: ${value}`);
   return mapped;
 }
+
+/**
+ * The reverse of the map above — translates a Prisma enum key ("FullTime")
+ * back to the hyphenated form ("Full-time") the frontend's <select> options
+ * and Zod schemas actually use. Every read path that returns an
+ * `employmentType` straight from Prisma (employee.service.ts's
+ * toPublicEmployee, invitation reads, etc.) needs to run it through this —
+ * otherwise the API accepts "Full-time" on write but echoes back "FullTime"
+ * on read, which silently breaks the edit form's dropdown (none of its
+ * options match "FullTime", so it renders blank even though the value is
+ * really set).
+ */
+const PRISMA_TO_EMPLOYMENT_TYPE: Record<string, string> = {
+  FullTime: "Full-time",
+  PartTime: "Part-time",
+  Contract: "Contract",
+};
+
+export function mapEmploymentTypeFromPrisma(value: string | null | undefined) {
+  if (!value) return value;
+  return PRISMA_TO_EMPLOYMENT_TYPE[value] ?? value;
+}

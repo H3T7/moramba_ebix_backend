@@ -306,6 +306,9 @@ model Invitation {
   department  String?
   designation String?
   phone       String?
+  dob         DateTime? @db.Date
+  gender      String?
+  address     String?
 
   // 👇 NEW — Milestone 12 revision: an invitation now carries the full
   // job/payment details an Admin filled in when adding this person, not
