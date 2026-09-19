@@ -14,13 +14,12 @@
  * The REST API, meanwhile, still speaks the ORIGINAL strings — that's
  * what the existing, already-tested frontend sends and expects back (zod
  * schemas validate against `"Documents Pending"`, not `"DocumentsPending"`).
- * These maps are the translation layer at that boundary: convert the raw
- * API string to the Prisma identifier right before a Prisma call, and back
- * again... except conversion back isn't actually needed, because Prisma
- * Client automatically returns records with the ORIGINAL `@map`-ed string
- * already (Prisma translates DB -> client using the `@map` value
- * automatically on reads) — this file is only needed for the
- * WRITE/FILTER direction: API string -> Prisma identifier.
+ * These maps are the translation layer at that boundary: `*ToPrisma`
+ * converts the raw API string to the Prisma identifier right before a
+ * write, and `*FromPrisma` (below the four `*ToPrisma` maps) converts back
+ * on the way out. Both directions are needed — see the correction note
+ * further down for why "just returns the mapped string automatically"
+ * was wrong.
  */
 
 export const transactionStatusToPrisma: Record<string, string> = {
@@ -62,3 +61,46 @@ export const employmentTypeToPrisma: Record<string, string> = {
   "Part-time": "PartTime",
   Contract: "Contract",
 };
+
+/**
+ * CORRECTION to this file's header comment above: reading a record back
+ * from Prisma Client does NOT automatically give you the original
+ * `@map`-ed string. `@map` on an enum member only renames the value
+ * actually stored in the database column — the Prisma Client's JS/TS
+ * value is always the enum member's DECLARED NAME (e.g. "PayAdvance"),
+ * never the mapped string ("Pay Advance"). This was previously assumed
+ * to "just work" and wasn't — every GET response was silently returning
+ * the unspaced Prisma identifier, which doesn't match any option in the
+ * frontend's <select> (built from the same spaced strings the *ToPrisma
+ * maps above use), so payment-terms/status fields looked blank on the
+ * edit form even though the real value was saved correctly.
+ *
+ * These are the reverse of the four maps above — run every enum field
+ * through the matching one of these before sending a Prisma row out over
+ * the API. Falls back to the raw value if it's somehow not a known key,
+ * so an unexpected value degrades to "shown as-is" rather than vanishing.
+ */
+function invert(map: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(map).map(([k, v]) => [v, k]));
+}
+const transactionStatusFromPrismaMap = invert(transactionStatusToPrisma);
+const paymentTermsFromPrismaMap = invert(paymentTermsToPrisma);
+const documentStatusFromPrismaMap = invert(documentStatusToPrisma);
+const shipmentStatusFromPrismaMap = invert(shipmentStatusToPrisma);
+
+export function transactionStatusFromPrisma(value: string | null | undefined) {
+  if (!value) return value;
+  return transactionStatusFromPrismaMap[value] ?? value;
+}
+export function paymentTermsFromPrisma(value: string | null | undefined) {
+  if (!value) return value;
+  return paymentTermsFromPrismaMap[value] ?? value;
+}
+export function documentStatusFromPrisma(value: string | null | undefined) {
+  if (!value) return value;
+  return documentStatusFromPrismaMap[value] ?? value;
+}
+export function shipmentStatusFromPrisma(value: string | null | undefined) {
+  if (!value) return value;
+  return shipmentStatusFromPrismaMap[value] ?? value;
+}

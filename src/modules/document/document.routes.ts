@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { upload, list, listForTransaction, getOne, replace, review, verifierQueue, remove } from "./document.controller.js";
+import { upload, list, listForTransaction, getOne, replace, updateMeta, review, verifierQueue, remove } from "./document.controller.js";
 import { requireAuth, requireCompanyParamRole, requireCompanyRole, companyIdFromRecord, requireVerifierAuth } from "../../middleware/auth.js";
 import { prisma } from "../../db/client.js";
 
@@ -32,6 +32,7 @@ transactionDocumentRouter.get("/:transactionId/documents", requireAuth, requireC
 
 documentRouter.get("/:id", requireAuth, requireCompanyRole(companyIdFromDocument, "admin", "accountant"), getOne);
 documentRouter.post("/:id/replace", requireAuth, requireCompanyRole(companyIdFromDocument, "admin", "accountant"), replace);
+documentRouter.patch("/:id", requireAuth, requireCompanyRole(companyIdFromDocument, "admin", "accountant"), updateMeta);
 documentRouter.delete("/:id", requireAuth, requireCompanyRole(companyIdFromDocument, "admin"), remove);
 
 verifierDocumentRouter.get("/queue", requireVerifierAuth, verifierQueue);

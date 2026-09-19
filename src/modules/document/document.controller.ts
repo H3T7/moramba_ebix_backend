@@ -1,11 +1,12 @@
 import type { Request, Response } from "express";
-import { uploadDocumentSchema, replaceDocumentSchema, reviewDocumentSchema } from "./document.schema.js";
+import { uploadDocumentSchema, replaceDocumentSchema, reviewDocumentSchema, updateDocumentMetaSchema } from "./document.schema.js";
 import {
   uploadDocument,
   listDocumentsByCompany,
   listDocumentsForTransaction,
   getDocument,
   replaceDocument,
+  updateDocumentMeta,
   reviewDocument,
   deleteDocument,
   listVerifierQueue,
@@ -44,6 +45,12 @@ export async function getOne(req: Request, res: Response) {
 export async function replace(req: Request, res: Response) {
   const { fileName } = replaceDocumentSchema.parse(req.body);
   const doc = await replaceDocument(req.params.id as string, req.employee!.id, fileName);
+  res.status(200).json(doc);
+}
+
+export async function updateMeta(req: Request, res: Response) {
+  const input = updateDocumentMetaSchema.parse(req.body);
+  const doc = await updateDocumentMeta(req.params.id as string, input);
   res.status(200).json(doc);
 }
 

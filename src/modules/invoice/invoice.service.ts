@@ -1,6 +1,6 @@
 import { prisma } from "../../db/client.js";
 import { AppError } from "../../middleware/errorHandler.js";
-import { transactionStatusToPrisma, paymentTermsToPrisma } from "../../lib/prismaEnumMaps.js";
+import { transactionStatusToPrisma, paymentTermsToPrisma, transactionStatusFromPrisma, paymentTermsFromPrisma } from "../../lib/prismaEnumMaps.js";
 import type { CreateInvoiceInput, UpdateInvoiceInput } from "./invoice.schema.js";
 
 /**
@@ -30,10 +30,17 @@ function withTotals<T extends { items: { quantity: unknown; rate: unknown; taxPe
   return { ...row, items, subtotal: subtotal.toFixed(2), taxTotal: taxTotal.toFixed(2), grandTotal: (subtotal + taxTotal).toFixed(2) };
 }
 
+// See bill.service.ts's matching withPublicEnums for why this is needed —
+// Prisma always returns status/paymentTerms as its unspaced enum
+// identifier, never the spaced string the frontend actually expects.
+function withPublicEnums<T extends { status: string; paymentTerms: string }>(row: T) {
+  return { ...row, status: transactionStatusFromPrisma(row.status), paymentTerms: paymentTermsFromPrisma(row.paymentTerms) };
+}
+
 async function getInvoiceWithItems(id: string) {
   const invoice = await prisma.invoice.findUnique({ where: { id }, include: { items: { orderBy: { sortOrder: "asc" } } } });
   if (!invoice) return null;
-  return withTotals(invoice);
+  return withPublicEnums(withTotals(invoice));
 }
 
 export async function listInvoicesByCompany(companyId: string) {
@@ -41,7 +48,7 @@ export async function listInvoicesByCompany(companyId: string) {
   // List view doesn't need every line item — just totals.
   return rows.map((invoice) => {
     const { items: _items, ...totals } = withTotals(invoice);
-    return totals;
+    return withPublicEnums(totals);
   });
 }
 

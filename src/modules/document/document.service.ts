@@ -1,7 +1,16 @@
 import { prisma } from "../../db/client.js";
 import { AppError } from "../../middleware/errorHandler.js";
-import { documentStatusToPrisma } from "../../lib/prismaEnumMaps.js";
-import type { UploadDocumentInput, ReviewDocumentInput } from "./document.schema.js";
+import { documentStatusToPrisma, documentStatusFromPrisma } from "../../lib/prismaEnumMaps.js";
+import type { UploadDocumentInput, ReviewDocumentInput, UpdateDocumentMetaInput } from "./document.schema.js";
+
+// Same fix as bill.service.ts/invoice.service.ts's withPublicEnums — Prisma
+// always returns `status` as its unspaced enum identifier
+// ("PendingVerification"), never the spaced string the frontend actually
+// expects ("Pending Verification"). Every function below that returns a
+// document row runs it through this.
+function withPublicDocStatus<T extends { status: string }>(doc: T) {
+  return { ...doc, status: documentStatusFromPrisma(doc.status) };
+}
 
 async function assertParentBelongsToCompany(companyId: string, invoiceId?: string, billId?: string) {
   if (invoiceId) {
@@ -28,6 +37,8 @@ export async function uploadDocument(companyId: string, uploadedByEmployeeId: st
         invoiceId: input.invoiceId,
         billId: input.billId,
         category: input.category,
+        docType: input.docType,
+        description: input.description,
         country: input.country,
         fileName: input.fileName,
         uploadedByEmployeeId,
@@ -39,25 +50,27 @@ export async function uploadDocument(companyId: string, uploadedByEmployeeId: st
       data: { documentId: doc.id, version: 1, fileName: input.fileName, uploadedByEmployeeId },
     });
 
-    return doc;
+    return withPublicDocStatus(doc);
   });
 }
 
 export async function listDocumentsByCompany(companyId: string) {
-  return prisma.document.findMany({ where: { companyId } });
+  const rows = await prisma.document.findMany({ where: { companyId } });
+  return rows.map(withPublicDocStatus);
 }
 
 export async function listDocumentsForTransaction(transactionType: "invoice" | "bill", transactionId: string) {
-  return prisma.document.findMany({
+  const rows = await prisma.document.findMany({
     where: transactionType === "invoice" ? { invoiceId: transactionId } : { billId: transactionId },
   });
+  return rows.map(withPublicDocStatus);
 }
 
 export async function getDocument(id: string) {
   const doc = await prisma.document.findUnique({ where: { id } });
   if (!doc) throw new AppError(404, "Document not found.");
   const history = await prisma.documentVersion.findMany({ where: { documentId: id }, orderBy: { version: "desc" } });
-  return { ...doc, history };
+  return { ...withPublicDocStatus(doc), history };
 }
 
 /**
@@ -85,7 +98,7 @@ export async function replaceDocument(id: string, uploadedByEmployeeId: string, 
 
     await tx.documentVersion.create({ data: { documentId: id, version: nextVersion, fileName, uploadedByEmployeeId } });
 
-    return updated;
+    return withPublicDocStatus(updated);
   });
 }
 
@@ -100,7 +113,7 @@ export async function reviewDocument(id: string, reviewerVerifierId: string, inp
   const existing = await prisma.document.findUnique({ where: { id } });
   if (!existing) throw new AppError(404, "Document not found.");
 
-  return prisma.document.update({
+  const updated = await prisma.document.update({
     where: { id },
     data: {
       status: DECISION_STATUS[input.decision],
@@ -109,6 +122,23 @@ export async function reviewDocument(id: string, reviewerVerifierId: string, inp
       rejectionReason: input.decision === "reject" ? input.rejectionReason : null,
     },
   });
+  return withPublicDocStatus(updated);
+}
+
+/**
+ * Patches docType/description WITHOUT touching fileName/version/status —
+ * this is what an edit form should call when the person only changed a
+ * document's label or note and re-picked the exact same file, so it
+ * doesn't create a confusing duplicate document row the way re-running
+ * uploadDocument would (that's a genuinely new file, a new version,
+ * needs re-verification; this is neither).
+ */
+export async function updateDocumentMeta(id: string, input: UpdateDocumentMetaInput) {
+  const updated = await prisma.document
+    .update({ where: { id }, data: { docType: input.docType, description: input.description } })
+    .catch(() => null);
+  if (!updated) throw new AppError(404, "Document not found.");
+  return withPublicDocStatus(updated);
 }
 
 export async function deleteDocument(id: string) {
@@ -131,7 +161,7 @@ export async function listVerifierQueue(status?: string) {
   return rows.map((r) => {
     const { company, invoice, bill, ...doc } = r;
     return {
-      ...doc,
+      ...withPublicDocStatus(doc),
       companyName: company.name,
       transactionNumber: invoice?.invoiceNumber ?? bill?.billNumber,
       transactionType: invoice ? "invoice" : "bill",

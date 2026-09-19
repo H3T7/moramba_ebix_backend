@@ -1,6 +1,6 @@
 import { prisma } from "../../db/client.js";
 import { AppError } from "../../middleware/errorHandler.js";
-import { transactionStatusToPrisma, paymentTermsToPrisma } from "../../lib/prismaEnumMaps.js";
+import { transactionStatusToPrisma, paymentTermsToPrisma, transactionStatusFromPrisma, paymentTermsFromPrisma } from "../../lib/prismaEnumMaps.js";
 import type { CreateBillInput, UpdateBillInput } from "./bill.schema.js";
 
 async function generateBillNumber(): Promise<string> {
@@ -21,17 +21,27 @@ function withTotals<T extends { items: { quantity: unknown; rate: unknown; taxPe
   return { ...row, items, subtotal: subtotal.toFixed(2), taxTotal: taxTotal.toFixed(2), grandTotal: (subtotal + taxTotal).toFixed(2) };
 }
 
+// Prisma always hands back `status`/`paymentTerms` as its own unspaced enum
+// identifier ("PayAdvance"), never the spaced string the frontend's
+// <select> options and zod schemas actually use ("Pay Advance") — see the
+// correction note in prismaEnumMaps.ts. Every read path below runs both
+// fields through this before returning, or the edit form's Payment Terms
+// field (and any status badge) silently fails to match and renders blank.
+function withPublicEnums<T extends { status: string; paymentTerms: string }>(row: T) {
+  return { ...row, status: transactionStatusFromPrisma(row.status), paymentTerms: paymentTermsFromPrisma(row.paymentTerms) };
+}
+
 async function getBillWithItems(id: string) {
   const bill = await prisma.bill.findUnique({ where: { id }, include: { items: { orderBy: { sortOrder: "asc" } } } });
   if (!bill) return null;
-  return withTotals(bill);
+  return withPublicEnums(withTotals(bill));
 }
 
 export async function listBillsByCompany(companyId: string) {
   const rows = await prisma.bill.findMany({ where: { companyId }, include: { items: true } });
   return rows.map((bill) => {
     const { items: _items, ...totals } = withTotals(bill);
-    return totals;
+    return withPublicEnums(totals);
   });
 }
 

@@ -570,6 +570,13 @@ model Document {
   billId    String? @map("bill_id")
 
   category DocumentCategory @default(other)
+  /// Which checklist slot this was uploaded for (e.g. "Commercial Invoice"),
+  /// distinct from `category` since several checklist items share one
+  /// category — see the docType migration's comment for why.
+  docType  String?          @map("doc_type")
+  /// Free-text note the uploader can attach — shown on the Overview and
+  /// Documents tabs alongside the filename/docType. Optional.
+  description String?
   country  String?
 
   /// The CURRENT version's filename — full history lives in
