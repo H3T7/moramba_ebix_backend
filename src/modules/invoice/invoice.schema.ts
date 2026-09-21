@@ -27,6 +27,19 @@ const exportDetailsSchema = z.object({
   // pages all expect (see moramba-ebix-frontend/src/modules/invoice/slice.js).
   issueDate: z.string().optional(),
   dueDate: z.string().optional(),
+  // Also new — same zero-migration JSON approach. These were being
+  // collected on the Billing step but never sent to the backend at all
+  // (see InvoiceFormPage.jsx's buildInvoicePayload, which used to drop
+  // them with a comment saying "the invoices table has no columns for
+  // them yet" — this is that column). Without this, editing an invoice
+  // always showed these fields empty, since nothing was ever there to
+  // load back.
+  billingAddress: z.string().optional(),
+  shippingAddress: z.string().optional(),
+  contactPerson: z.string().optional(),
+  contactEmail: z.string().optional(),
+  contactPhone: z.string().optional(),
+  taxRegistrationId: z.string().optional(),
 });
 
 export const createInvoiceSchema = z.object({
