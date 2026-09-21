@@ -17,6 +17,12 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(10, "JWT_SECRET must be at least 10 characters"),
   JWT_EXPIRES_IN: z.string().default("7d"),
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
+  // Where uploaded document files are stored on THIS machine's disk. A
+  // relative path is resolved against the folder the server is started
+  // from (the backend project root when you use `npm run dev`).
+  UPLOAD_DIR: z.string().default("uploads"),
+  // Largest single file a document upload will accept, in megabytes.
+  MAX_UPLOAD_MB: z.coerce.number().positive().default(10),
 });
 
 const parsed = envSchema.safeParse(process.env);

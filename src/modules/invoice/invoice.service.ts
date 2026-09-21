@@ -2,6 +2,7 @@ import { prisma } from "../../db/client.js";
 import { AppError } from "../../middleware/errorHandler.js";
 import { transactionStatusToPrisma, paymentTermsToPrisma, transactionStatusFromPrisma, paymentTermsFromPrisma } from "../../lib/prismaEnumMaps.js";
 import type { CreateInvoiceInput, UpdateInvoiceInput } from "./invoice.schema.js";
+import { listStoredFilesForParent, deleteStoredFiles } from "../document/document.service.js";
 
 /**
  * Generates "EXP-2026-0001" style numbers, retrying isn't needed the same
@@ -167,6 +168,10 @@ export async function deleteInvoice(id: string) {
   if (!existing) throw new AppError(404, "Invoice not found.");
   if (existing.submitted) throw new AppError(409, "A submitted invoice can't be deleted.");
 
-  await prisma.invoice.delete({ where: { id } }); // invoice_items cascade on delete
+  // Documents cascade-delete in the database, but their FILES on disk don't —
+  // collect them first, then clean them up once the invoice is really gone.
+  const files = await listStoredFilesForParent({ invoiceId: id });
+  await prisma.invoice.delete({ where: { id } }); // invoice_items + documents cascade on delete
+  await deleteStoredFiles(files);
   return { id };
 }

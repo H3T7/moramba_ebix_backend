@@ -585,6 +585,15 @@ model Document {
   version              Int    @default(1)
   uploadedByEmployeeId String @map("uploaded_by_employee_id")
 
+  /// Where the CURRENT version's actual file lives on disk:
+  /// <UPLOAD_DIR>/<companyId>/<storedName> (see lib/fileStorage.ts). This
+  /// is a server-generated random name, NOT the person's file name (that's
+  /// `fileName` above). Null only for rows created before file storage
+  /// existed — those have a name but no file behind them.
+  storedName String? @map("stored_name")
+  mimeType   String? @map("mime_type")
+  fileSize   Int?    @map("file_size")
+
   status             DocumentStatus @default(PendingVerification)
   reviewerVerifierId String?        @map("reviewer_verifier_id")
   reviewerComments   String?        @map("reviewer_comments")
@@ -612,6 +621,12 @@ model DocumentVersion {
   fileName             String   @map("file_name")
   uploadedByEmployeeId String   @map("uploaded_by_employee_id")
   uploadedAt           DateTime @default(now()) @map("uploaded_at")
+
+  /// Same meaning as on Document — kept per version so every old version
+  /// stays downloadable after a replace (the old file is never deleted).
+  storedName String? @map("stored_name")
+  mimeType   String? @map("mime_type")
+  fileSize   Int?    @map("file_size")
 
   document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
   uploadedBy Employee @relation(fields: [uploadedByEmployeeId], references: [id])

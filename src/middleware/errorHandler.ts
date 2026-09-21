@@ -1,6 +1,8 @@
 import type { Request, Response, NextFunction } from "express";
 import { ZodError } from "zod";
 import { Prisma } from "@prisma/client";
+import multer from "multer";
+import { env } from "../config/env.js";
 
 /**
  * A small custom Error subclass so route code can do:
@@ -36,6 +38,19 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
 
   if (err instanceof AppError) {
     return res.status(err.statusCode).json({ error: err.message });
+  }
+
+  // Thrown by the multipart parser (middleware/upload.ts) BEFORE the route
+  // handler runs — most commonly a file over the size limit. Without this
+  // branch those would fall through to the generic 500 below.
+  if (err instanceof multer.MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({ error: `That file is too large. The maximum size is ${env.MAX_UPLOAD_MB} MB.` });
+    }
+    if (err.code === "LIMIT_UNEXPECTED_FILE") {
+      return res.status(400).json({ error: "Unexpected file field. Send exactly one file in a field named \"file\"." });
+    }
+    return res.status(400).json({ error: `Upload failed: ${err.message}` });
   }
 
   /**

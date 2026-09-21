@@ -2,6 +2,7 @@ import { prisma } from "../../db/client.js";
 import { AppError } from "../../middleware/errorHandler.js";
 import { transactionStatusToPrisma, paymentTermsToPrisma, transactionStatusFromPrisma, paymentTermsFromPrisma } from "../../lib/prismaEnumMaps.js";
 import type { CreateBillInput, UpdateBillInput } from "./bill.schema.js";
+import { listStoredFilesForParent, deleteStoredFiles } from "../document/document.service.js";
 
 async function generateBillNumber(): Promise<string> {
   const year = new Date().getFullYear();
@@ -148,6 +149,10 @@ export async function deleteBill(id: string) {
   if (!existing) throw new AppError(404, "Bill not found.");
   if (existing.submitted) throw new AppError(409, "A submitted bill can't be deleted.");
 
+  // Documents cascade-delete in the database, but their FILES on disk don't —
+  // collect them first, then clean them up once the bill is really gone.
+  const files = await listStoredFilesForParent({ billId: id });
   await prisma.bill.delete({ where: { id } });
+  await deleteStoredFiles(files);
   return { id };
 }

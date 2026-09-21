@@ -1,10 +1,11 @@
-import type { Request, Response } from "express";
-import { uploadDocumentSchema, replaceDocumentSchema, reviewDocumentSchema, updateDocumentMetaSchema } from "./document.schema.js";
+import type { NextFunction, Request, Response } from "express";
+import { uploadDocumentSchema, reviewDocumentSchema, updateDocumentMetaSchema, fileQuerySchema } from "./document.schema.js";
 import {
   uploadDocument,
   listDocumentsByCompany,
   listDocumentsForTransaction,
   getDocument,
+  getDocumentFile,
   replaceDocument,
   updateDocumentMeta,
   reviewDocument,
@@ -12,8 +13,11 @@ import {
   listVerifierQueue,
 } from "./document.service.js";
 import { AppError } from "../../middleware/errorHandler.js";
+import { INLINE_SAFE_MIME_TYPES, contentDisposition } from "../../lib/fileStorage.js";
 
 export async function upload(req: Request, res: Response) {
+  // Multipart text fields arrive in req.body; the file itself is req.file
+  // (both filled in by middleware/upload.ts before this runs).
   const input = uploadDocumentSchema.parse(req.body);
   // req.employee (the CALLER's own row at this company, resolved by
   // requireCompanyParamRole) — NOT req.user.sub, which is a userId, not
@@ -21,7 +25,7 @@ export async function upload(req: Request, res: Response) {
   // (both are just UUID strings, so TypeScript can't catch this) and
   // corrupt uploadedByEmployeeId with a value that isn't a real row in
   // the employees table at all.
-  const doc = await uploadDocument(req.params.companyId as string, req.employee!.id, input);
+  const doc = await uploadDocument(req.params.companyId as string, req.employee!.id, input, req.file);
   res.status(201).json(doc);
 }
 
@@ -42,9 +46,33 @@ export async function getOne(req: Request, res: Response) {
   res.status(200).json(doc);
 }
 
+/**
+ * GET /documents/:id/file[?version=N][&download=1] — streams the stored
+ * file itself. Shared by the company route and the verifier route (each
+ * guards it with its own auth middleware).
+ *
+ * Only PDFs and images are ever sent as `inline` (viewable in the
+ * browser); every other type — and anything asked for with ?download=1 —
+ * is sent as an `attachment`. That keeps a file like an .html or .svg from
+ * ever being rendered as a live page.
+ */
+export async function file(req: Request, res: Response, next: NextFunction) {
+  const { version, download } = fileQuerySchema.parse(req.query);
+  const { dir, storedName, fileName, mimeType } = await getDocumentFile(req.params.id as string, version);
+
+  const inline = INLINE_SAFE_MIME_TYPES.has(mimeType) && !download;
+  res.setHeader("Content-Type", mimeType);
+  res.setHeader("Content-Disposition", contentDisposition(inline ? "inline" : "attachment", fileName));
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+
+  res.sendFile(storedName, { root: dir, dotfiles: "allow" }, (err) => {
+    if (err && !res.headersSent) next(err);
+  });
+}
+
 export async function replace(req: Request, res: Response) {
-  const { fileName } = replaceDocumentSchema.parse(req.body);
-  const doc = await replaceDocument(req.params.id as string, req.employee!.id, fileName);
+  const doc = await replaceDocument(req.params.id as string, req.employee!.id, req.file);
   res.status(200).json(doc);
 }
 
