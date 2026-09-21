@@ -35,11 +35,17 @@ export const updateDocumentMetaSchema = z.object({
 });
 export type UpdateDocumentMetaInput = z.infer<typeof updateDocumentMetaSchema>;
 
-export const reviewDocumentSchema = z.object({
-  decision: z.enum(["approve", "reject", "request_changes"]),
-  comments: z.string().optional(),
-  rejectionReason: z.string().optional(),
-});
+export const reviewDocumentSchema = z
+  .object({
+    decision: z.enum(["approve", "reject", "request_changes"]),
+    comments: z.string().optional(),
+    rejectionReason: z.string().optional(),
+  })
+  // Rejecting or asking for changes without saying why leaves the uploader guessing.
+  .refine((d) => d.decision === "approve" || Boolean((d.rejectionReason ?? d.comments ?? "").trim()), {
+    message: "Please explain why, so the uploader knows what to fix.",
+    path: ["comments"],
+  });
 export type ReviewDocumentInput = z.infer<typeof reviewDocumentSchema>;
 
 /** `?version=2` on the file route — which historical version to download. Omitted = the current one. */

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { upload, list, listForTransaction, getOne, file, replace, updateMeta, review, verifierQueue, remove } from "./document.controller.js";
+import { upload, list, listForTransaction, getOne, getOneForVerifier, beginReview, file, replace, updateMeta, review, verifierQueue, remove } from "./document.controller.js";
 import { requireAuth, requireCompanyParamRole, requireCompanyRole, companyIdFromRecord, requireVerifierAuth } from "../../middleware/auth.js";
 import { singleFileUpload } from "../../middleware/upload.js";
 import { prisma } from "../../db/client.js";
@@ -40,6 +40,7 @@ documentRouter.patch("/:id", requireAuth, requireCompanyRole(companyIdFromDocume
 documentRouter.delete("/:id", requireAuth, requireCompanyRole(companyIdFromDocument, "admin"), remove);
 
 verifierDocumentRouter.get("/queue", requireVerifierAuth, verifierQueue);
-verifierDocumentRouter.get("/:id", requireVerifierAuth, getOne);
+verifierDocumentRouter.get("/:id", requireVerifierAuth, getOneForVerifier);
+verifierDocumentRouter.post("/:id/start-review", requireVerifierAuth, beginReview);
 verifierDocumentRouter.get("/:id/file", requireVerifierAuth, file);
 verifierDocumentRouter.post("/:id/review", requireVerifierAuth, review);

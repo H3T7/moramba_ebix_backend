@@ -2,7 +2,7 @@ import { prisma } from "../../db/client.js";
 import { AppError } from "../../middleware/errorHandler.js";
 import { transactionStatusToPrisma, paymentTermsToPrisma, transactionStatusFromPrisma, paymentTermsFromPrisma } from "../../lib/prismaEnumMaps.js";
 import type { CreateInvoiceInput, UpdateInvoiceInput } from "./invoice.schema.js";
-import { listStoredFilesForParent, deleteStoredFiles } from "../document/document.service.js";
+import { listStoredFilesForParent, deleteStoredFiles, assertDocumentsApprovedForSubmit } from "../document/document.service.js";
 
 /**
  * Generates "EXP-2026-0001" style numbers, retrying isn't needed the same
@@ -155,6 +155,8 @@ export async function submitInvoice(id: string) {
   const existing = await prisma.invoice.findUnique({ where: { id } });
   if (!existing) throw new AppError(404, "Invoice not found.");
   if (existing.submitted) throw new AppError(409, "This invoice was already submitted.");
+  // The approval gate: every document must have been approved by a Verifier first.
+  await assertDocumentsApprovedForSubmit({ invoiceId: id }, existing.requiredDocs);
 
   const updated = await prisma.invoice.update({
     where: { id },

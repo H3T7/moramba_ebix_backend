@@ -5,10 +5,13 @@ import {
   listDocumentsByCompany,
   listDocumentsForTransaction,
   getDocument,
+  getDocumentForVerifier,
+  loadVerifierContext,
   getDocumentFile,
   replaceDocument,
   updateDocumentMeta,
   reviewDocument,
+  startReview,
   deleteDocument,
   listVerifierQueue,
 } from "./document.service.js";
@@ -58,7 +61,10 @@ export async function getOne(req: Request, res: Response) {
  */
 export async function file(req: Request, res: Response, next: NextFunction) {
   const { version, download } = fileQuerySchema.parse(req.query);
-  const { dir, storedName, fileName, mimeType } = await getDocumentFile(req.params.id as string, version);
+  // This handler serves both realms. On the verifier route `req.verifier` is set, and a
+  // company verifier may only fetch files of their own company.
+  const verifier = req.verifier ? await loadVerifierContext(req.verifier.sub) : undefined;
+  const { dir, storedName, fileName, mimeType } = await getDocumentFile(req.params.id as string, version, verifier);
 
   const inline = INLINE_SAFE_MIME_TYPES.has(mimeType) && !download;
   res.setHeader("Content-Type", mimeType);
@@ -69,6 +75,19 @@ export async function file(req: Request, res: Response, next: NextFunction) {
   res.sendFile(storedName, { root: dir, dotfiles: "allow" }, (err) => {
     if (err && !res.headersSent) next(err);
   });
+}
+
+/** Verifier-only: the same document detail plus its company and the invoice/bill it belongs to. */
+export async function getOneForVerifier(req: Request, res: Response) {
+  const ctx = await loadVerifierContext(req.verifier!.sub);
+  const doc = await getDocumentForVerifier(req.params.id as string, ctx);
+  res.status(200).json(doc);
+}
+
+export async function beginReview(req: Request, res: Response) {
+  const ctx = await loadVerifierContext(req.verifier!.sub);
+  const doc = await startReview(req.params.id as string, ctx);
+  res.status(200).json(doc);
 }
 
 export async function replace(req: Request, res: Response) {
@@ -84,13 +103,15 @@ export async function updateMeta(req: Request, res: Response) {
 
 export async function review(req: Request, res: Response) {
   const input = reviewDocumentSchema.parse(req.body);
-  const doc = await reviewDocument(req.params.id as string, req.verifier!.sub, input);
+  const ctx = await loadVerifierContext(req.verifier!.sub);
+  const doc = await reviewDocument(req.params.id as string, ctx, input);
   res.status(200).json(doc);
 }
 
 export async function verifierQueue(req: Request, res: Response) {
   const status = req.query.status as string | undefined;
-  const rows = await listVerifierQueue(status);
+  const ctx = await loadVerifierContext(req.verifier!.sub);
+  const rows = await listVerifierQueue(ctx, status);
   res.status(200).json(rows);
 }
 

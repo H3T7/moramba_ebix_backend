@@ -191,6 +191,7 @@ model User {
 
   employees        Employee[]
   invitedAsAccount Invitation[] @relation("InvitedUser")
+  verifierProfile  Verifier?
 
   @@map("users")
 }
@@ -208,6 +209,15 @@ model Verifier {
   createdAt      DateTime @default(now()) @map("created_at")
 
   reviewedDocuments Document[]
+  reviews           DocumentReview[]
+
+  /// Set when this portal account belongs to a real company user who holds the
+  /// "verifier" ROLE at one or more companies (added as an employee). Such a
+  /// verifier signs in with their normal email + password and can only review
+  /// documents of the companies where they hold that role. Null = one of
+  /// Moramba's own verifiers (separate login, reviews every company).
+  userId String? @unique @map("user_id")
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("verifiers")
 }
@@ -608,6 +618,7 @@ model Document {
   uploadedBy     Employee          @relation("UploadedBy", fields: [uploadedByEmployeeId], references: [id])
   reviewer       Verifier?         @relation(fields: [reviewerVerifierId], references: [id])
   versions       DocumentVersion[]
+  reviews        DocumentReview[]
 
   @@map("documents")
 }
@@ -632,6 +643,34 @@ model DocumentVersion {
   uploadedBy Employee @relation(fields: [uploadedByEmployeeId], references: [id])
 
   @@map("document_versions")
+}
+
+/// Append-only audit trail of everything a Verifier did to a document: picked
+/// it up for review, approved it, rejected it, asked for changes. `Document`
+/// itself only remembers the LATEST decision; this keeps them all, so the
+/// company can see WHO decided WHAT, WHEN and WHY — and so a later re-upload
+/// (which resets the document to "Pending Verification") doesn't erase the
+/// history of the earlier rounds.
+model DocumentReview {
+  id         String @id @default(uuid())
+  documentId String @map("document_id")
+  verifierId String @map("verifier_id")
+
+  /// Which VERSION of the document was being reviewed.
+  version Int
+  /// What the document became as a result: UnderReview (picked up),
+  /// Verified, Rejected or RequiresChanges.
+  status  DocumentStatus
+  comments String?
+  reason   String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  verifier Verifier @relation(fields: [verifierId], references: [id])
+
+  @@index([documentId])
+  @@map("document_reviews")
 }
 
 // ---------------------------------------------------------------------------

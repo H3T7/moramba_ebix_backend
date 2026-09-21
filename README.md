@@ -363,11 +363,32 @@ Same "exactly one parent" pattern as Payments, plus real version history.
 
 | Method | Path | Who | Notes |
 |---|---|---|---|
-| GET/POST | `/api/companies/:companyId/documents` | Admin, Accountant | |
+| GET | `/api/companies/:companyId/documents` | Admin, Accountant | Newest first. Each row carries `uploadedBy` (a name), `uploadedAt`, `hasFile`, `mimeType`, `fileSize` |
+| POST | `/api/companies/:companyId/documents` | Admin, Accountant | **`multipart/form-data`**: one file in the field `file`, plus text fields `invoiceId` *or* `billId` (exactly one), `category`, and optional `docType`, `description`, `country`. The file name comes from the file itself. |
 | GET | `/api/transactions/:transactionId/documents?type=invoice\|bill` | Admin, Accountant | |
-| GET | `/api/documents/:id` | Admin, Accountant | Includes full `history` array, newest version first |
-| POST | `/api/documents/:id/replace` | Admin, Accountant | Bumps `version`, resets status to `Pending Verification`, clears any prior rejection reason — a corrected file has to be looked at fresh |
-| DELETE | `/api/documents/:id` | **Admin only** | |
+| GET | `/api/documents/:id` | Admin, Accountant | Includes full `history` array, newest version first (each entry: `version`, `fileName`, `fileSize`, `uploadedAt`, `uploadedBy`, `hasFile`, `isCurrent`) |
+| GET | `/api/documents/:id/file` | Admin, Accountant | Streams the stored file. `?version=N` fetches an older version; `?download=1` forces a download. PDFs and images are sent `inline`, everything else as an `attachment`. Send the JWT in the `Authorization` header (fetch it as a Blob — a plain `<a href>` can't carry the header). |
+| POST | `/api/documents/:id/replace` | Admin, Accountant | **`multipart/form-data`** with the new file in `file`. Bumps `version`, resets status to `Pending Verification`, clears any prior rejection reason — a corrected file has to be looked at fresh. The previous file is **kept** so it stays in the history. |
+| PATCH | `/api/documents/:id` | Admin, Accountant | Changes only `docType` / `description` — no new file, no new version |
+| DELETE | `/api/documents/:id` | **Admin only** | Also deletes every stored file (all versions). Deleting an invoice/bill does the same for its documents. |
+
+### Where the files live
+
+Uploaded files are stored on the server's own disk, **not** in the database:
+
+```
+<UPLOAD_DIR>/<companyId>/<random-uuid>.<ext>      (UPLOAD_DIR defaults to ./uploads)
+```
+
+The database keeps the person's original file name (for display and download), plus `stored_name`, `mime_type` and `file_size`. **Back up the `uploads/` folder together with the database.** Configure with `UPLOAD_DIR` and `MAX_UPLOAD_MB` (default 10) in `.env`.
+
+- Allowed types: `.pdf .png .jpg .jpeg .webp .gif .doc .docx .xls .xlsx .csv .txt`. The stored/served MIME type is looked up from the extension, never trusted from the browser. HTML and SVG are deliberately not accepted.
+- A rejected upload never leaves a file behind: everything that can be rejected is checked *before* the file is written, and if the database write fails afterwards the file is deleted again.
+- Rows created before file storage existed have `hasFile: false` (a name, but no file). They can be fixed by using Replace.
+- Verifiers can fetch a file at `GET /api/verifier/documents/:id/file` (their own token; a company token is rejected with `401`, and vice versa).
+- All of `src/lib/fileStorage.ts` is the only code that touches the disk, so moving to S3/R2 later means rewriting just that file.
+
+**Run the migration** `20260921120000_document_file_storage` (`npm run db:deploy`) — it adds `stored_name`, `mime_type`, `file_size` to `documents` and `document_versions`.
 
 The review decision itself (`POST /.../review`) has moved to the Verifier Portal's own routes — see Section 20.
 
@@ -424,9 +445,10 @@ A completely separate login realm from the company workspace — matching the fr
 |---|---|---|
 | POST | `/api/verifier-auth/login` | `{ email, password }` → `{ token, verifier }` |
 | GET | `/api/verifier-auth/me` | Requires a verifier token |
-| GET | `/api/verifier/documents/queue?status=...` | Every document across every company, optionally filtered by status. Joined with the company name and parent invoice/bill number |
-| GET | `/api/verifier/documents/:id` | |
-| POST | `/api/verifier/documents/:id/review` | `{ decision: "approve" \| "reject" \| "request_changes", comments?, rejectionReason? }` — this is the same decision logic documented in Section 17, now actually gated by a verifier's own token instead of an Admin's |
+| GET | `/api/verifier/documents/queue?status=...` | Every document across every company, **oldest first** (a real FIFO queue), optionally filtered by status. Each row carries `companyName`, `transactionNumber`, `transactionType`, `uploadedBy`, `reviewerName` and `reviewedAt` |
+| GET | `/api/verifier/documents/:id` | The document plus its `history` (versions), its `reviews` log, its `companyName`, and a `transaction` summary of the invoice/bill it belongs to (number, status, customer/vendor, countries, currency, total) — a verifier can't call the company-only invoice/bill routes, so this is how the review screen knows what it is reviewing |
+| POST | `/api/verifier/documents/:id/start-review` | Picks the document up: `Pending Verification` → `Under Review`, assigned to the caller, so the company can see it has been seen and by whom. A no-op if it is already under review or decided — opening a document to look at it never disturbs someone else's decision |
+| POST | `/api/verifier/documents/:id/review` | `{ decision: "approve" \| "reject" \| "request_changes", comments?, rejectionReason? }` — this is the same decision logic documented in Section 17, now actually gated by a verifier's own token instead of an Admin's. **Rejecting or requesting changes requires a reason** (`rejectionReason` or `comments`) → otherwise `400`; the reason is stored on the document and shown to whoever uploaded it |
 
 **The most important thing this module gets right is isolation, and it's actually tested, not just asserted:**
 - An employee's JWT (`type: "employee"`) used on `/api/verifier/documents/queue` → `401`
@@ -438,6 +460,35 @@ A completely separate login realm from the company workspace — matching the fr
 **Migration note worth knowing about:** `documents.reviewerEmployeeId` had to become `reviewerVerifierId` — a genuinely different foreign key target, since a verifier is not an employee. `drizzle-kit generate` detected this as an ambiguous "was this a rename?" case and wanted an interactive yes/no answer, which this sandbox has no TTY to provide. Rather than hand-write risky raw SQL migrations, I split it into two unambiguous steps instead — add the new column (migrate), then drop the old one (migrate) — so the tool could handle each one automatically with its snapshot tracking staying correct, no guessing involved.
 
 **A real bug `tsc` caught before it ever ran:** after renaming the column, `replaceDocument` (which resets a document back to "Pending Verification" when a corrected file is uploaded) still referenced the old `reviewerEmployeeId` field name in its reset logic. TypeScript's `--noEmit` check refused to compile it — caught and fixed before the server ever started, not discovered live.
+
+### Two kinds of verifier
+
+| | Moramba's own verifiers | Company employees with the **Verifier** role |
+|---|---|---|
+| Where they live | rows in `verifiers` (seeded), with their own password | a normal company user + an employee membership with `role = verifier` (added via Employees → Add, then the invitation is accepted) |
+| Sign in with | `POST /api/verifier-auth/login` | the **same email + password as their normal login** — either `POST /api/verifier-auth/login`, or a normal login followed by `POST /api/verifier-auth/exchange` |
+| Can review | documents of **every** company (`scope: "all"`) | only documents of the company/companies where they hold the role (`scope: "company"`, with a `companies` list) |
+
+Notes:
+- The portal keeps a linked row in `verifiers` for a company verifier (`verifiers.user_id`, created the first time they open the portal) because review decisions are recorded against a verifier id. Migration `20260921180000_verifier_user_link`.
+- **Scope is re-checked on every request** — the queue, the document detail, the file download, `start-review` and the decision. Suspending someone or changing their role takes effect immediately, even for a token they already hold; login then fails too.
+- A document outside a company verifier's scope answers **`404 Document not found`** (not `403`), so the response doesn't reveal that the id exists.
+- A wrong password, an unknown email and a user with no verifier role all return the same `401 Invalid email or password.` on the portal login. `POST /api/verifier-auth/exchange` (which needs a normal login token) returns `403` if the caller holds no verifier role.
+- Why company-scoped: otherwise any company's HR/Admin could add "a verifier" and read every other company's documents.
+- On the frontend, `AuthGuard` sends a user whose role at the active company is `verifier` to `/verifier-entry`, which performs the exchange and opens the portal.
+
+### Approvals: who decides what
+
+| Step | Who | What happens |
+|---|---|---|
+| Share | Admin / Accountant | Upload documents to an invoice or bill → each starts as `Pending Verification` and appears in every verifier's queue |
+| Verify | Verifier | `start-review` → `Under Review`; then `approve` → `Verified`, or `reject` / `request_changes` (a reason is required) |
+| Fix | Admin / Accountant | `POST /api/documents/:id/replace` uploads a corrected file → the document goes back to `Pending Verification` and into the queue again. Earlier rounds stay in the review log |
+| Submit | **Admin / Owner only** | `POST /api/invoices/:id/submit` / `POST /api/bills/:id/submit` |
+
+**Submit is gated server-side.** It returns `409` with an explanation unless (a) at least one document has been uploaded, (b) every uploaded document is `Verified`, and (c) at least as many documents as the invoice/bill's required-documents checklist have been uploaded. (The UI already hid the button until this was true; now the API enforces it too.)
+
+**Review log.** Every pick-up and decision is kept in the append-only `document_reviews` table (`documentId`, `verifierId`, the document `version` reviewed, resulting `status`, `comments`, `reason`, `createdAt`). `GET /api/documents/:id` and the verifier version return it as `reviews` (newest first, with `verifierName`). Run the migration `20260921150000_document_reviews` (`npm run db:deploy`).
 
 ## 21. Where the backend stands now
 

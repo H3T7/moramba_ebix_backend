@@ -2,7 +2,7 @@ import { prisma } from "../../db/client.js";
 import { AppError } from "../../middleware/errorHandler.js";
 import { transactionStatusToPrisma, paymentTermsToPrisma, transactionStatusFromPrisma, paymentTermsFromPrisma } from "../../lib/prismaEnumMaps.js";
 import type { CreateBillInput, UpdateBillInput } from "./bill.schema.js";
-import { listStoredFilesForParent, deleteStoredFiles } from "../document/document.service.js";
+import { listStoredFilesForParent, deleteStoredFiles, assertDocumentsApprovedForSubmit } from "../document/document.service.js";
 
 async function generateBillNumber(): Promise<string> {
   const year = new Date().getFullYear();
@@ -136,6 +136,8 @@ export async function submitBill(id: string) {
   const existing = await prisma.bill.findUnique({ where: { id } });
   if (!existing) throw new AppError(404, "Bill not found.");
   if (existing.submitted) throw new AppError(409, "This bill was already submitted.");
+  // The approval gate: every document must have been approved by a Verifier first.
+  await assertDocumentsApprovedForSubmit({ billId: id }, existing.requiredDocs);
 
   const updated = await prisma.bill.update({
     where: { id },
