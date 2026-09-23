@@ -367,6 +367,10 @@ model Customer {
   company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   invoices Invoice[]
 
+  /// Enforced with a case-insensitive functional index in
+  /// migrations/20260922100000_customer_vendor_unique_email (Prisma's plain
+  /// @@unique can't express lower(email) or be combined this way) — a
+  /// company can't have two customers with the same email.
   @@map("customers")
 }
 
@@ -388,6 +392,8 @@ model Vendor {
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   bills   Bill[]
 
+  /// Same rule as Customer above: enforced with a case-insensitive
+  /// functional index in migrations/20260922100000_customer_vendor_unique_email.
   @@map("vendors")
 }
 

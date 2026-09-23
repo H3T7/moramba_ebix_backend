@@ -33,11 +33,17 @@ export async function create(req: Request, res: Response) {
   // invitation instead (see employee.service.ts), and an invitation needs
   // to record who sent it.
   const result = await createEmployee(req.params.companyId as string, req.employee!.id, input);
-  if (result.type === "invitation") {
-    res.status(200).json({ type: "invitation", invitation: result.invitation });
-  } else {
-    res.status(201).json({ type: "employee", employee: result.employee, temporaryPassword: result.temporaryPassword });
-  }
+  // The service ALWAYS returns `{ type: "invitation", ... }` now (see its
+  // own comment — there's no more `{ type: "employee" }` case), so this
+  // used to be a single `if` with an unreachable `else` branch, and that
+  // unreachable branch was the ONLY one forwarding `temporaryPassword` —
+  // meaning it silently never reached the response at all. One branch,
+  // forwarding it whenever the service actually set one.
+  res.status(200).json({
+    type: "invitation",
+    invitation: result.invitation,
+    ...(result.temporaryPassword ? { temporaryPassword: result.temporaryPassword } : {}),
+  });
 }
 
 export async function update(req: Request, res: Response) {

@@ -61,10 +61,9 @@ export async function getEmployee(id: string) {
  * acceptInvitation(), once the person explicitly accepts it.
  *
  *  - Brand-new email: no `users` row exists yet, so one is created right
- *    here with a system-generated temporary password (per the brief's
- *    FirstnameLastname@123 convention — still needed since there's no
- *    email service yet and they need *something* to log in with and see
- *    the pending invitation). An invitation is then created too.
+ *    here with a fixed system temporary password (there's no email service
+ *    yet, so they need *something* to log in with and see the pending
+ *    invitation — they're expected to change it after logging in).
  *  - Existing email: no new account, just an invitation, exactly as
  *    before.
  *
@@ -81,7 +80,11 @@ export async function createEmployee(companyId: string, invitedByEmployeeId: str
   let temporaryPassword: string | undefined;
 
   if (!existingUser) {
-    temporaryPassword = `${input.firstName}${input.lastName}@123`;
+    // Fixed rather than personalized (was `${firstName}${lastName}@123`) —
+    // simpler to communicate and remember while there's no email delivery
+    // to send it automatically. It's a genuinely TEMPORARY password only:
+    // the person is expected to change it after their first login.
+    temporaryPassword = "Test@123";
     const passwordHash = await hashPassword(temporaryPassword);
     existingUser = await prisma.user.create({
       data: {

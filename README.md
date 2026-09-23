@@ -263,6 +263,8 @@ Same nested-resource shape as Employees, but a **different** RBAC rule — this 
 | GET / POST | `/api/companies/:companyId/vendors` | Admin, Accountant |
 | GET / PATCH / DELETE | `/api/vendors/:id` | Admin, Accountant |
 
+**Duplicate emails are rejected**, per company, case-insensitively: creating (or updating) a customer/vendor with an email that already exists for that same company returns `409` with a message naming the existing record (`"A customer with this email already exists for this company (Acme Corp)."`). The SAME email is fine across two *different* companies. Enforced twice — an application-level check for a clear error message, and a case-insensitive database index (`prisma/migrations/20260922100000_customer_vendor_unique_email`) as a backstop against a race between two simultaneous requests.
+
 ## 11. Products API reference
 
 | Method | Path | Who can call it |
@@ -579,7 +581,7 @@ Two milestones ago, a JWT carried a `role` claim that could go stale (Section 27
 
 ### The rule from the brief, now actually enforced
 
-"If we find the user is already registered, we just send a company invite" — `employee.service.ts`'s `createEmployee` now checks `users` by email before doing anything: if that email already has an account, this creates a real **invitation** instead of a second account (delegating straight into `invitation.service.ts`'s `createInvitation`); only for a genuinely new email does it create both a `users` row (with a temporary password, `FirstnameLastname@123`, exactly per the brief) and an `employees` row directly, active immediately with no invitation step.
+"If we find the user is already registered, we just send a company invite" — `employee.service.ts`'s `createEmployee` now checks `users` by email before doing anything: if that email already has an account, this creates a real **invitation** instead of a second account (delegating straight into `invitation.service.ts`'s `createInvitation`); only for a genuinely new email does it create both a `users` row (with a fixed temporary password, `Test@123`) and an `employees` row directly, active immediately with no invitation step.
 
 ### Migration approach
 
